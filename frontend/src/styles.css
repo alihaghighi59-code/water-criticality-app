@@ -309,6 +309,15 @@ footer {
   border-color: #0f6b4c;
 }
 
+button.stop-btn {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+button.stop-btn:hover:not(:disabled) {
+  background: #f8ecec;
+}
+
 .opus-map-legend {
   display: inline-flex;
   flex-wrap: wrap;

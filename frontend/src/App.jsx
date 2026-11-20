@@ -70,6 +70,8 @@ export default function App() {
   const [analysis, setAnalysis] = useState(null);
   const [optResult, setOptResult] = useState(null);
   const [optLive, setOptLive] = useState(null);
+  const [optJobId, setOptJobId] = useState(null);
+  const [optStopping, setOptStopping] = useState(false);
 
   useEffect(() => {
     fetch(`${API}/api/defaults`)
@@ -167,10 +169,27 @@ export default function App() {
     }
   }
 
+  async function stopOptimize() {
+    if (!optJobId || optStopping) return;
+    setOptStopping(true);
+    try {
+      await fetch(`${API}/api/optimize/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: optJobId }),
+      });
+    } catch (e) {
+      setError(`Stop request failed: ${e.message}`);
+      setOptStopping(false);
+    }
+  }
+
   async function runOptimize() {
     setError("");
     setOptResult(null);
     setOptLive(null);
+    setOptJobId(null);
+    setOptStopping(false);
     if (!file) {
       setError("Choose an EPANET .inp file first.");
       return;
@@ -219,11 +238,16 @@ export default function App() {
         for (const line of lines) {
           if (!line.trim()) continue;
           const msg = JSON.parse(line);
-          if (msg.event === "progress") {
+          if (msg.event === "started") {
+            setOptJobId(msg.job_id);
+          } else if (msg.event === "progress") {
+            if (msg.job_id) setOptJobId(msg.job_id);
             setOptLive(msg);
           } else if (msg.event === "done") {
             setOptResult(msg.result);
             setOptLive(null);
+            setOptJobId(null);
+            setOptStopping(false);
           } else if (msg.event === "error") {
             throw new Error(msg.error);
           }
@@ -233,6 +257,8 @@ export default function App() {
       setError(e.message);
     } finally {
       setBusy(null);
+      setOptJobId(null);
+      setOptStopping(false);
     }
   }
 
@@ -500,7 +526,20 @@ export default function App() {
             <button onClick={runOptimize} disabled={!!busy}>
               {busy === "optimize" ? "Running GA…" : "Run optimization"}
             </button>
+            {busy === "optimize" ? (
+              <button
+                type="button"
+                className="secondary stop-btn"
+                onClick={stopOptimize}
+                disabled={!optJobId || optStopping}
+              >
+                {optStopping ? "Stopping…" : "Stop"}
+              </button>
+            ) : null}
           </div>
+          <p className="muted" style={{ marginTop: "0.35rem" }}>
+            Stop halts after the current generation and keeps the best solution so far (CSV / optimized .inp).
+          </p>
         </section>
       </div>
 
@@ -521,9 +560,14 @@ export default function App() {
             <p className="muted">
               Generation {optLive.generation} / {optLive.n_gen} · cost {n2(optLive.cost)} ·
               violation {n2(optLive.violation)} · Pareto size {optLive.pareto_size}
+              {optStopping ? " · stop requested…" : ""}
             </p>
           ) : (
-            <p className="muted">Finished. Charts show best-of-Pareto (min violation) per generation.</p>
+            <p className="muted">
+              {optResult?.stopped_early
+                ? `Stopped early at generation ${optResult.generations_completed}. Best-so-far treated as optimum.`
+                : "Finished. Charts show best-of-Pareto (min violation) per generation."}
+            </p>
           )}
           <div className="history">
             <div>
@@ -635,7 +679,10 @@ export default function App() {
 
       {optResult ? (
         <section className="panel" style={{ marginTop: "1rem" }}>
-          <h2>Optimization results</h2>
+          <h2>
+            Optimization results
+            {optResult.stopped_early ? " (stopped — best so far)" : ""}
+          </h2>
           <div className="stats">
             <div className="stat">
               <strong>{n2(optResult.best.cost)}</strong>
@@ -648,6 +695,13 @@ export default function App() {
             <div className="stat">
               <strong>{optResult.pareto_front.length}</strong>
               <span>Pareto solutions</span>
+            </div>
+            <div className="stat">
+              <strong>
+                {optResult.generations_completed ?? "—"}
+                {optResult.settings?.n_gen != null ? ` / ${optResult.settings.n_gen}` : ""}
+              </strong>
+              <span>Generations</span>
             </div>
           </div>
           <div className="row">

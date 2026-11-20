@@ -38,7 +38,7 @@ Optional: `npm run build` then open the Flask server — it serves `frontend/dis
 
 - **Network figure:** Opus-style Leaflet map (`CRS.Simple`, dark water bg, conduit/junction colors, Labels Auto|All|Off, pipe/node name tooltips) via `/api/network`; pipes tint by composite after analysis.
 - **CSV export:** criticality pipes + baseline; optimization history / Pareto / diameters / best.
-- **Live GA progress:** `/api/optimize/stream` (NDJSON) updates cost/violation charts and table each generation.
+- **Live GA progress:** `/api/optimize/stream` (NDJSON) updates cost/violation charts and table each generation. **Stop** (`POST /api/optimize/stop`) halts after the current generation and keeps best-so-far (CSV + optimized `.inp`).
 - **Help tab:** formulations for indices and GA objectives from the notebooks.
 - **Decimals:** all floating results display/export with **two decimal places**.
 

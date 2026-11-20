@@ -6,6 +6,7 @@ import json
 import queue
 import tempfile
 import threading
+import uuid
 from pathlib import Path
 
 import wntr
@@ -18,6 +19,10 @@ ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 
 app = Flask(__name__, static_folder=None)
+
+# job_id -> threading.Event (set = stop requested)
+_OPT_STOP: dict[str, threading.Event] = {}
+_OPT_LOCK = threading.Lock()
 
 
 @app.after_request
@@ -219,15 +224,35 @@ def optimize_route():
         return jsonify({"error": str(e)}), 400
 
 
+@app.post("/api/optimize/stop")
+def optimize_stop():
+    """Request early stop of a running GA job; best-so-far is returned on the stream."""
+    body = request.get_json(silent=True) or {}
+    job_id = body.get("job_id") or request.form.get("job_id")
+    if not job_id:
+        return jsonify({"error": "Missing job_id"}), 400
+    with _OPT_LOCK:
+        ev = _OPT_STOP.get(str(job_id))
+    if ev is None:
+        return jsonify({"ok": False, "error": "Unknown or finished job_id", "job_id": job_id}), 404
+    ev.set()
+    return jsonify({"ok": True, "job_id": job_id, "stopping": True})
+
+
 @app.post("/api/optimize/stream")
 def optimize_stream():
-    """NDJSON stream: progress lines, then a final done/error line."""
+    """NDJSON stream: started → progress… → done/error. Supports Stop via job_id."""
     try:
         inp_path = _save_upload(request.files.get("file"))
         settings = _parse_json_field(request.form, "settings", default={}) or {}
         kwargs = _opt_kwargs(settings)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
+
+    job_id = uuid.uuid4().hex
+    stop_event = threading.Event()
+    with _OPT_LOCK:
+        _OPT_STOP[job_id] = stop_event
 
     def generate():
         q: queue.Queue = queue.Queue()
@@ -238,23 +263,31 @@ def optimize_stream():
         def worker():
             try:
                 result = optimize.run_ga_optimization(
-                    str(inp_path), on_generation=on_generation, **kwargs
+                    str(inp_path),
+                    on_generation=on_generation,
+                    should_stop=stop_event.is_set,
+                    **kwargs,
                 )
                 result["source_file"] = inp_path.name
+                result["job_id"] = job_id
                 q.put(("done", result))
             except Exception as exc:
                 q.put(("error", str(exc)))
+            finally:
+                with _OPT_LOCK:
+                    _OPT_STOP.pop(job_id, None)
 
         threading.Thread(target=worker, daemon=True).start()
+        yield json.dumps({"event": "started", "job_id": job_id}) + "\n"
         while True:
             kind, data = q.get()
             if kind == "progress":
-                yield json.dumps({"event": "progress", **data}) + "\n"
+                yield json.dumps({"event": "progress", "job_id": job_id, **data}) + "\n"
             elif kind == "done":
-                yield json.dumps({"event": "done", "result": data}) + "\n"
+                yield json.dumps({"event": "done", "job_id": job_id, "result": data}) + "\n"
                 break
             else:
-                yield json.dumps({"event": "error", "error": data}) + "\n"
+                yield json.dumps({"event": "error", "job_id": job_id, "error": data}) + "\n"
                 break
 
     return Response(

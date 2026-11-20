@@ -173,11 +173,13 @@ def run_ga_optimization(
     seed=None,
     write_opt_inp=True,
     on_generation=None,
+    should_stop=None,
 ):
     """NSGA-II multi-objective pipe sizing (cost + pressure violation).
 
     Defaults for n_gen/pop_size are UI-safe; notebook used n_gen=500, pop_size=200.
     on_generation(payload): optional callback each generation (incl. gen 0 = initial pop).
+    should_stop(): optional; when True between generations, halt and return best-so-far.
     """
     pipe_sizes = np.array(pipe_sizes_mm if pipe_sizes_mm is not None else DEFAULT_PIPE_SIZES_MM, dtype=float)
     pipe_costs = np.array(pipe_costs if pipe_costs is not None else DEFAULT_PIPE_COSTS, dtype=float)
@@ -257,6 +259,15 @@ def run_ga_optimization(
         if on_generation is not None:
             on_generation(payload)
 
+    def _stop_requested():
+        try:
+            return bool(should_stop and should_stop())
+        except Exception:
+            return False
+
+    stopped_early = False
+    last_gen = 0
+
     fits = toolbox.map(toolbox.evaluate, pop)
     for ind, fit in zip(pop, fits):
         ind.fitness.values = fit
@@ -266,17 +277,27 @@ def run_ga_optimization(
     violation_history.append(float(best0.fitness.values[1]))
     _emit(0, best0)
 
-    for gen in range(1, int(n_gen) + 1):
-        offspring = algorithms.varAnd(pop, toolbox, cxpb=float(cxpb), mutpb=float(mutpb))
-        fits = toolbox.map(toolbox.evaluate, offspring)
-        for ind, fit in zip(offspring, fits):
-            ind.fitness.values = fit
-        pop = toolbox.select(offspring + pop, k=int(pop_size))
-        hof.update(pop)
-        best = min(hof, key=lambda ind: ind.fitness.values[1])
-        cost_history.append(float(best.fitness.values[0]))
-        violation_history.append(float(best.fitness.values[1]))
-        _emit(gen, best)
+    if _stop_requested():
+        stopped_early = True
+    else:
+        for gen in range(1, int(n_gen) + 1):
+            if _stop_requested():
+                stopped_early = True
+                break
+            offspring = algorithms.varAnd(pop, toolbox, cxpb=float(cxpb), mutpb=float(mutpb))
+            fits = toolbox.map(toolbox.evaluate, offspring)
+            for ind, fit in zip(offspring, fits):
+                ind.fitness.values = fit
+            pop = toolbox.select(offspring + pop, k=int(pop_size))
+            hof.update(pop)
+            best = min(hof, key=lambda ind: ind.fitness.values[1])
+            cost_history.append(float(best.fitness.values[0]))
+            violation_history.append(float(best.fitness.values[1]))
+            last_gen = gen
+            _emit(gen, best)
+            if _stop_requested():
+                stopped_early = True
+                break
 
     best_solution = min(hof, key=lambda ind: (ind.fitness.values[1], ind.fitness.values[0]))
     for i, pipe_idx in enumerate(best_solution):
@@ -296,6 +317,8 @@ def run_ga_optimization(
 
     return {
         "n_pipes": n_pipes,
+        "stopped_early": bool(stopped_early),
+        "generations_completed": int(last_gen if last_gen or stopped_early else int(n_gen)),
         "settings": {
             "min_pressure": _r2(min_pressure),
             "pipe_sizes_mm": [_r2(v) for v in pipe_sizes.tolist()],
