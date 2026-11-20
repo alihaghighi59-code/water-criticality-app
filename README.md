@@ -5,7 +5,11 @@ Minimal React + Flask app under `Roya/criticality-app`.
 - **Criticality**: reuses logic from `Water Criticality Code/WDN_Criticality.ipynb` (`backend/criticality.py`).
 - **Optimization**: reuses the DEAP NSGA-II pipe-sizing GA from `GA_WDN_Optimization.ipynb` (`backend/optimize.py`).
 
-## Run
+## Run (double-click)
+
+Double-click **`Start Criticality App.bat`** in this folder. It starts the API (5055), the Vite UI (5173), installs frontend deps if needed, and opens the browser. Leave the two server windows open.
+
+### Manual
 
 ### 1. API (Python)
 
