@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import queue
 import tempfile
+import threading
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory
+import wntr
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 import criticality
 import optimize
@@ -46,6 +49,62 @@ def _save_upload(file_storage) -> Path:
     return path
 
 
+def _network_geometry(inp_path: Path) -> dict:
+    """Nodes + pipes with EPANET coordinates for the React figure."""
+    wn = wntr.network.WaterNetworkModel(str(inp_path))
+    nodes = []
+    for name in wn.node_name_list:
+        node = wn.get_node(name)
+        x, y = node.coordinates if node.coordinates is not None else (0.0, 0.0)
+        nodes.append(
+            {
+                "id": str(name),
+                "x": round(float(x), 2),
+                "y": round(float(y), 2),
+                "type": str(node.node_type),
+            }
+        )
+    pipes = []
+    for name in wn.pipe_name_list:
+        link = wn.get_link(name)
+        pipes.append(
+            {
+                "id": str(name),
+                "start": str(link.start_node_name),
+                "end": str(link.end_node_name),
+                "diameter_m": round(float(link.diameter), 2),
+                "length_m": round(float(link.length), 2),
+            }
+        )
+    return {
+        "source_file": inp_path.name,
+        "nodes": nodes,
+        "pipes": pipes,
+        "counts": {
+            "nodes": len(nodes),
+            "pipes": len(pipes),
+            "junctions": len(wn.junction_name_list),
+            "reservoirs": len(wn.reservoir_name_list),
+            "tanks": len(wn.tank_name_list),
+        },
+    }
+
+
+def _opt_kwargs(settings: dict) -> dict:
+    return dict(
+        min_pressure=float(settings.get("min_pressure", 18)),
+        pipe_sizes_mm=settings.get("pipe_sizes_mm"),
+        pipe_costs=settings.get("pipe_costs"),
+        n_gen=int(settings.get("n_gen", 20)),
+        pop_size=int(settings.get("pop_size", 30)),
+        cxpb=float(settings.get("cxpb", 0.7)),
+        mutpb=float(settings.get("mutpb", 0.2)),
+        indpb=float(settings.get("indpb", 0.1)),
+        seed=settings.get("seed"),
+        write_opt_inp=True,
+    )
+
+
 @app.get("/api/health")
 def health():
     return jsonify({"ok": True, "app": "criticality-app"})
@@ -56,10 +115,12 @@ def defaults():
     return jsonify(
         {
             "criticality": {
-                "min_head": criticality.get_min_head(),
-                "composite_weights": criticality.COMPOSITE_WEIGHTS,
+                "min_head": round(float(criticality.get_min_head()), 2),
+                "composite_weights": {
+                    k: round(float(v), 2) for k, v in criticality.COMPOSITE_WEIGHTS.items()
+                },
                 "critical_nodes": {
-                    k: {"structure": v[0], "importance": v[1]}
+                    k: {"structure": v[0], "importance": round(float(v[1]), 2)}
                     for k, v in criticality.CRITICAL_NODES.items()
                 },
                 "metrics": [
@@ -77,11 +138,12 @@ def defaults():
                     "weighted_surplus_X",
                     "resilience_index_Ir",
                 ],
+                "numeric_decimals": 2,
             },
             "optimization": {
-                "min_pressure": 18,
-                "pipe_sizes_mm": optimize.DEFAULT_PIPE_SIZES_MM,
-                "pipe_costs": optimize.DEFAULT_PIPE_COSTS,
+                "min_pressure": 18.0,
+                "pipe_sizes_mm": [float(v) for v in optimize.DEFAULT_PIPE_SIZES_MM],
+                "pipe_costs": [float(v) for v in optimize.DEFAULT_PIPE_COSTS],
                 "n_gen": 20,
                 "pop_size": 30,
                 "cxpb": 0.7,
@@ -92,6 +154,15 @@ def defaults():
             },
         }
     )
+
+
+@app.post("/api/network")
+def network():
+    try:
+        inp_path = _save_upload(request.files.get("file"))
+        return jsonify(_network_geometry(inp_path))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 
 @app.post("/api/analyze")
@@ -123,6 +194,7 @@ def analyze():
             output_folder=str(inp_path.parent / "results") if make_plots else None,
         )
         result["source_file"] = inp_path.name
+        result["geometry"] = _network_geometry(inp_path)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -133,24 +205,56 @@ def optimize_route():
     try:
         inp_path = _save_upload(request.files.get("file"))
         settings = _parse_json_field(request.form, "settings", default={}) or {}
-
-        result = optimize.run_ga_optimization(
-            str(inp_path),
-            min_pressure=float(settings.get("min_pressure", 18)),
-            pipe_sizes_mm=settings.get("pipe_sizes_mm"),
-            pipe_costs=settings.get("pipe_costs"),
-            n_gen=int(settings.get("n_gen", 20)),
-            pop_size=int(settings.get("pop_size", 30)),
-            cxpb=float(settings.get("cxpb", 0.7)),
-            mutpb=float(settings.get("mutpb", 0.2)),
-            indpb=float(settings.get("indpb", 0.1)),
-            seed=settings.get("seed"),
-            write_opt_inp=True,
-        )
+        result = optimize.run_ga_optimization(str(inp_path), **_opt_kwargs(settings))
         result["source_file"] = inp_path.name
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
+
+
+@app.post("/api/optimize/stream")
+def optimize_stream():
+    """NDJSON stream: progress lines, then a final done/error line."""
+    try:
+        inp_path = _save_upload(request.files.get("file"))
+        settings = _parse_json_field(request.form, "settings", default={}) or {}
+        kwargs = _opt_kwargs(settings)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+    def generate():
+        q: queue.Queue = queue.Queue()
+
+        def on_generation(payload):
+            q.put(("progress", payload))
+
+        def worker():
+            try:
+                result = optimize.run_ga_optimization(
+                    str(inp_path), on_generation=on_generation, **kwargs
+                )
+                result["source_file"] = inp_path.name
+                q.put(("done", result))
+            except Exception as exc:
+                q.put(("error", str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+        while True:
+            kind, data = q.get()
+            if kind == "progress":
+                yield json.dumps({"event": "progress", **data}) + "\n"
+            elif kind == "done":
+                yield json.dumps({"event": "done", "result": data}) + "\n"
+                break
+            else:
+                yield json.dumps({"event": "error", "error": data}) + "\n"
+                break
+
+    return Response(
+        generate(),
+        mimetype="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.route("/", defaults={"path": ""})
@@ -171,4 +275,4 @@ def spa(path: str):
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5055, debug=False)
+    app.run(host="127.0.0.1", port=5055, debug=False, threaded=True)

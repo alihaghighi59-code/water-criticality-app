@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Help from "./Help.jsx";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -10,7 +11,37 @@ const WEIGHT_KEYS = [
   "Demand_Coverage_%",
 ];
 
-function Sparkline({ values, color = "#0f6b4c" }) {
+/** Format numeric results to exactly two decimal places. */
+export function n2(v) {
+  if (v === null || v === undefined || v === "") return "";
+  const x = Number(v);
+  if (Number.isNaN(x)) return String(v);
+  return x.toFixed(2);
+}
+
+function downloadText(filename, text, mime = "text/plain;charset=utf-8") {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function toCsv(rows) {
+  if (!rows?.length) return "";
+  const keys = Object.keys(rows[0]);
+  const esc = (v) => {
+    if (v === null || v === undefined) return "";
+    if (typeof v === "number" && Number.isFinite(v)) return n2(v);
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  return [keys.join(","), ...rows.map((r) => keys.map((k) => esc(r[k])).join(","))].join("\n");
+}
+
+function Sparkline({ values, color = "#0f6b4c", labelMin, labelMax }) {
   const points = useMemo(() => {
     if (!values?.length) return "";
     const min = Math.min(...values);
@@ -27,24 +58,155 @@ function Sparkline({ values, color = "#0f6b4c" }) {
 
   if (!values?.length) return <div className="spark" />;
   return (
-    <svg className="spark" viewBox="0 0 100 100" preserveAspectRatio="none">
-      <polyline fill="none" stroke={color} strokeWidth="2" points={points} />
-    </svg>
+    <div>
+      <svg className="spark" viewBox="0 0 100 100" preserveAspectRatio="none">
+        <polyline fill="none" stroke={color} strokeWidth="2" points={points} />
+      </svg>
+      <div className="spark-labels muted">
+        <span>{n2(labelMin ?? Math.min(...values))}</span>
+        <span>{n2(labelMax ?? Math.max(...values))}</span>
+      </div>
+    </div>
   );
 }
 
-function downloadText(filename, text) {
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+function NetworkMap({ geometry, pipeScores }) {
+  const [hover, setHover] = useState(null);
+  const [view, setView] = useState({ scale: 1, tx: 0, ty: 0 });
+  const drag = useRef(null);
+
+  const layout = useMemo(() => {
+    if (!geometry?.nodes?.length) return null;
+    const xs = geometry.nodes.map((n) => n.x);
+    const ys = geometry.nodes.map((n) => n.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const w = maxX - minX || 1;
+    const h = maxY - minY || 1;
+    const pad = 24;
+    const W = 720;
+    const H = 420;
+    const sx = (W - 2 * pad) / w;
+    const sy = (H - 2 * pad) / h;
+    const s = Math.min(sx, sy);
+    const byId = {};
+    for (const n of geometry.nodes) {
+      byId[n.id] = {
+        ...n,
+        px: pad + (n.x - minX) * s,
+        // flip Y for screen coordinates
+        py: H - pad - (n.y - minY) * s,
+      };
+    }
+    return { byId, W, H, pipes: geometry.pipes || [] };
+  }, [geometry]);
+
+  const scoreMap = useMemo(() => {
+    const m = {};
+    if (pipeScores) {
+      for (const p of pipeScores) m[String(p.Pipe_ID)] = Number(p.Composite_Criticality);
+    }
+    return m;
+  }, [pipeScores]);
+
+  const colorFor = (id) => {
+    const v = scoreMap[id];
+    if (v === undefined || Number.isNaN(v)) return "#5a7264";
+    const t = Math.max(0, Math.min(1, v / 100));
+    const r = Math.round(20 + t * 160);
+    const g = Math.round(110 - t * 80);
+    const b = Math.round(70 - t * 40);
+    return `rgb(${r},${g},${b})`;
+  };
+
+  if (!layout) {
+    return <p className="muted">Upload an .inp file to show the network figure.</p>;
+  }
+
+  const onWheel = (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    setView((v) => ({ ...v, scale: Math.min(8, Math.max(0.3, v.scale * factor)) }));
+  };
+
+  return (
+    <div className="net-wrap">
+      <svg
+        className="net-svg"
+        viewBox={`0 0 ${layout.W} ${layout.H}`}
+        onWheel={onWheel}
+        onMouseDown={(e) => {
+          drag.current = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty };
+        }}
+        onMouseMove={(e) => {
+          if (!drag.current) return;
+          setView((v) => ({
+            ...v,
+            tx: drag.current.tx + (e.clientX - drag.current.x),
+            ty: drag.current.ty + (e.clientY - drag.current.y),
+          }));
+        }}
+        onMouseUp={() => {
+          drag.current = null;
+        }}
+        onMouseLeave={() => {
+          drag.current = null;
+        }}
+      >
+        <g transform={`translate(${view.tx} ${view.ty}) scale(${view.scale})`}>
+          {layout.pipes.map((p) => {
+            const a = layout.byId[p.start];
+            const b = layout.byId[p.end];
+            if (!a || !b) return null;
+            const score = scoreMap[p.id];
+            return (
+              <line
+                key={p.id}
+                x1={a.px}
+                y1={a.py}
+                x2={b.px}
+                y2={b.py}
+                stroke={colorFor(p.id)}
+                strokeWidth={score !== undefined ? 2.2 : 1.4}
+                onMouseEnter={() =>
+                  setHover(
+                    `Pipe ${p.id} · L=${n2(p.length_m)} m · D=${n2(p.diameter_m)} m` +
+                      (score !== undefined ? ` · composite=${n2(score)}` : "")
+                  )
+                }
+                onMouseLeave={() => setHover(null)}
+              />
+            );
+          })}
+          {Object.values(layout.byId).map((n) => (
+            <circle
+              key={n.id}
+              cx={n.px}
+              cy={n.py}
+              r={n.type === "Reservoir" || n.type === "Tank" ? 5.5 : 3.2}
+              fill={n.type === "Reservoir" ? "#0f6b4c" : n.type === "Tank" ? "#8a4b12" : "#14201a"}
+              onMouseEnter={() =>
+                setHover(`Node ${n.id} (${n.type}) · x=${n2(n.x)}, y=${n2(n.y)}`)
+              }
+              onMouseLeave={() => setHover(null)}
+            />
+          ))}
+        </g>
+      </svg>
+      <div className="net-caption muted">
+        Drag to pan · wheel to zoom
+        {hover ? ` · ${hover}` : ""}
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
+  const [tab, setTab] = useState("app");
   const [file, setFile] = useState(null);
+  const [geometry, setGeometry] = useState(null);
   const [defaults, setDefaults] = useState(null);
   const [minHead, setMinHead] = useState(18);
   const [weights, setWeights] = useState({});
@@ -65,6 +227,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [analysis, setAnalysis] = useState(null);
   const [optResult, setOptResult] = useState(null);
+  const [optLive, setOptLive] = useState(null);
 
   useEffect(() => {
     fetch(`${API}/api/defaults`)
@@ -89,6 +252,37 @@ export default function App() {
       })
       .catch((e) => setError(`Could not load defaults: ${e.message}`));
   }, []);
+
+  const loadNetwork = useCallback(async (f) => {
+    if (!f) {
+      setGeometry(null);
+      return;
+    }
+    const form = new FormData();
+    form.append("file", f);
+    setBusy("network");
+    setError("");
+    try {
+      const res = await fetch(`${API}/api/network`, { method: "POST", body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      setGeometry(data);
+    } catch (e) {
+      setError(e.message);
+      setGeometry(null);
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  async function onFileChange(e) {
+    const f = e.target.files?.[0] || null;
+    setFile(f);
+    setAnalysis(null);
+    setOptResult(null);
+    setOptLive(null);
+    await loadNetwork(f);
+  }
 
   async function runAnalyze() {
     setError("");
@@ -115,6 +309,7 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || res.statusText);
       setAnalysis(data);
+      if (data.geometry) setGeometry(data.geometry);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -125,6 +320,7 @@ export default function App() {
   async function runOptimize() {
     setError("");
     setOptResult(null);
+    setOptLive(null);
     if (!file) {
       setError("Choose an EPANET .inp file first.");
       return;
@@ -156,10 +352,33 @@ export default function App() {
     form.append("settings", JSON.stringify(settings));
     setBusy("optimize");
     try {
-      const res = await fetch(`${API}/api/optimize`, { method: "POST", body: form });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || res.statusText);
-      setOptResult(data);
+      const res = await fetch(`${API}/api/optimize/stream`, { method: "POST", body: form });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || res.statusText);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const msg = JSON.parse(line);
+          if (msg.event === "progress") {
+            setOptLive(msg);
+          } else if (msg.event === "done") {
+            setOptResult(msg.result);
+            setOptLive(null);
+          } else if (msg.event === "error") {
+            throw new Error(msg.error);
+          }
+        }
+      }
     } catch (e) {
       setError(e.message);
     } finally {
@@ -168,14 +387,93 @@ export default function App() {
   }
 
   const topPipes = analysis?.pipes?.slice(0, 50) ?? [];
+  const stem = (file?.name || "network").replace(/\.inp$/i, "");
+  const liveHistory = optLive
+    ? { cost: optLive.cost_history || [], violation: optLive.violation_history || [] }
+    : optResult?.history;
+
+  function exportCriticalityCsv() {
+    if (!analysis?.pipes?.length) return;
+    downloadText(`${stem}_criticality.csv`, toCsv(analysis.pipes), "text/csv;charset=utf-8");
+  }
+
+  function exportBaselineCsv() {
+    if (!analysis) return;
+    const row = {
+      source_file: analysis.source_file,
+      weighted_surplus_X: analysis.baseline.weighted_surplus_X,
+      resilience_index_Ir: analysis.baseline.resilience_index_Ir,
+      min_head_m: analysis.baseline.min_head_m,
+      pipes: analysis.network.pipes,
+      junctions: analysis.network.junctions,
+      reservoirs: analysis.network.reservoirs,
+    };
+    downloadText(`${stem}_baseline.csv`, toCsv([row]), "text/csv;charset=utf-8");
+  }
+
+  function exportOptCsv() {
+    if (!optResult) return;
+    const hist = (optResult.history.cost || []).map((c, i) => ({
+      generation: i,
+      cost: c,
+      violation: optResult.history.violation[i],
+    }));
+    downloadText(`${stem}_opt_history.csv`, toCsv(hist), "text/csv;charset=utf-8");
+    downloadText(
+      `${stem}_opt_pareto.csv`,
+      toCsv(optResult.pareto_front || []),
+      "text/csv;charset=utf-8"
+    );
+    const diameters = Object.entries(optResult.best.pipe_diameters_mm || {}).map(
+      ([pipe_id, diameter_mm]) => ({ pipe_id, diameter_mm })
+    );
+    downloadText(`${stem}_opt_diameters.csv`, toCsv(diameters), "text/csv;charset=utf-8");
+    downloadText(
+      `${stem}_opt_best.csv`,
+      toCsv([
+        {
+          cost: optResult.best.cost,
+          violation: optResult.best.violation,
+          n_pipes: optResult.n_pipes,
+        },
+      ]),
+      "text/csv;charset=utf-8"
+    );
+  }
+
+  if (tab === "help") {
+    return (
+      <>
+        <nav className="tabs">
+          <button type="button" className="secondary" onClick={() => setTab("app")}>
+            App
+          </button>
+          <button type="button" onClick={() => setTab("help")}>
+            Help
+          </button>
+        </nav>
+        <Help />
+      </>
+    );
+  }
 
   return (
     <>
+      <nav className="tabs">
+        <button type="button" onClick={() => setTab("app")}>
+          App
+        </button>
+        <button type="button" className="secondary" onClick={() => setTab("help")}>
+          Help
+        </button>
+      </nav>
+
       <header className="hero">
         <h1>WDN Criticality</h1>
         <p>
-          Upload an EPANET <code>.inp</code> network, compute pipe criticality measures from the
-          Water Criticality Code, and run the existing DEAP pipe-sizing GA with its settings exposed.
+          Upload an EPANET <code>.inp</code>, view the network, compute Water Criticality Code
+          metrics, and run the DEAP pipe-sizing GA with live objective progress. Numerics use two
+          decimal places.
         </p>
       </header>
 
@@ -184,22 +482,26 @@ export default function App() {
         <div className="row">
           <label className="file-btn">
             Choose .inp
-            <input
-              type="file"
-              accept=".inp"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
-            />
+            <input type="file" accept=".inp" onChange={onFileChange} />
           </label>
           <span className="muted">{file ? file.name : "No file selected"}</span>
         </div>
+        {geometry ? (
+          <>
+            <p className="muted">
+              {geometry.counts.nodes} nodes · {geometry.counts.pipes} pipes
+              {analysis ? " · pipes colored by composite criticality after analysis" : ""}
+            </p>
+            <NetworkMap geometry={geometry} pipeScores={analysis?.pipes} />
+          </>
+        ) : null}
       </section>
 
       <div className="grid two" style={{ marginTop: "1rem" }}>
         <section className="panel">
           <h2>Criticality analysis</h2>
           <p className="muted">
-            Metrics reuse <code>Water Criticality Code/WDN_Criticality.ipynb</code> (WNTR +
-            importance-weighted surplus / path / flow / betweenness / demand → composite).
+            Reuses <code>WDN_Criticality.ipynb</code> (see Help for formulations).
           </p>
 
           <div className="row">
@@ -208,7 +510,7 @@ export default function App() {
               <input
                 type="number"
                 value={minHead}
-                step="0.1"
+                step="0.01"
                 onChange={(e) => setMinHead(Number(e.target.value))}
               />
             </div>
@@ -225,25 +527,20 @@ export default function App() {
                   min="0"
                   max="1"
                   value={weights[k] ?? 0}
-                  onChange={(e) =>
-                    setWeights((w) => ({ ...w, [k]: Number(e.target.value) }))
-                  }
+                  onChange={(e) => setWeights((w) => ({ ...w, [k]: Number(e.target.value) }))}
                 />
               </div>
             ))}
           </div>
 
           <h3 style={{ marginTop: "0.9rem", fontSize: "1rem" }}>Critical nodes JSON</h3>
-          <p className="muted">
-            Format: <code>{`{"16": {"structure": "Hospital", "importance": 4}}`}</code>
-          </p>
           <textarea
             value={criticalNodesText}
             onChange={(e) => setCriticalNodesText(e.target.value)}
           />
 
           <div className="row">
-            <button onClick={runAnalyze} disabled={busy === "analyze"}>
+            <button onClick={runAnalyze} disabled={!!busy}>
               {busy === "analyze" ? "Running analysis…" : "Run criticality"}
             </button>
           </div>
@@ -252,9 +549,7 @@ export default function App() {
         <section className="panel">
           <h2>Optimization (GA)</h2>
           <p className="muted">
-            From <code>GA_WDN_Optimization.ipynb</code>: NSGA-II minimizing pipe cost and average
-            pressure violation. Notebook scale was n_gen=500 / pop_size=200 — UI defaults are smaller
-            for interactive runs.
+            NSGA-II from <code>GA_WDN_Optimization.ipynb</code>. Progress streams each generation.
           </p>
 
           <div className="row">
@@ -262,6 +557,7 @@ export default function App() {
               <label>Min pressure (m)</label>
               <input
                 type="number"
+                step="0.01"
                 value={opt.min_pressure}
                 onChange={(e) => setOpt({ ...opt, min_pressure: e.target.value })}
               />
@@ -289,7 +585,7 @@ export default function App() {
               <label>cxpb</label>
               <input
                 type="number"
-                step="0.05"
+                step="0.01"
                 value={opt.cxpb}
                 onChange={(e) => setOpt({ ...opt, cxpb: e.target.value })}
               />
@@ -298,7 +594,7 @@ export default function App() {
               <label>mutpb</label>
               <input
                 type="number"
-                step="0.05"
+                step="0.01"
                 value={opt.mutpb}
                 onChange={(e) => setOpt({ ...opt, mutpb: e.target.value })}
               />
@@ -307,7 +603,7 @@ export default function App() {
               <label>indpb</label>
               <input
                 type="number"
-                step="0.05"
+                step="0.01"
                 value={opt.indpb}
                 onChange={(e) => setOpt({ ...opt, indpb: e.target.value })}
               />
@@ -340,7 +636,7 @@ export default function App() {
           </div>
 
           <div className="row">
-            <button onClick={runOptimize} disabled={busy === "optimize"}>
+            <button onClick={runOptimize} disabled={!!busy}>
               {busy === "optimize" ? "Running GA…" : "Run optimization"}
             </button>
           </div>
@@ -350,13 +646,68 @@ export default function App() {
       {error ? <div className="status error">{error}</div> : null}
       {busy ? (
         <div className="status">
-          Working: {busy}. Pipe-by-pipe resilience can take a while on large networks.
+          Working: {busy}
+          {busy === "optimize" && optLive
+            ? ` · gen ${optLive.generation}/${optLive.n_gen} · cost ${n2(optLive.cost)} · violation ${n2(optLive.violation)}`
+            : ""}
         </div>
+      ) : null}
+
+      {(optLive || optResult) && liveHistory ? (
+        <section className="panel" style={{ marginTop: "1rem" }}>
+          <h2>Objective-function process</h2>
+          {optLive ? (
+            <p className="muted">
+              Generation {optLive.generation} / {optLive.n_gen} · cost {n2(optLive.cost)} ·
+              violation {n2(optLive.violation)} · Pareto size {optLive.pareto_size}
+            </p>
+          ) : (
+            <p className="muted">Finished. Charts show best-of-Pareto (min violation) per generation.</p>
+          )}
+          <div className="history">
+            <div>
+              <small className="muted">Cost</small>
+              <Sparkline values={liveHistory.cost} />
+            </div>
+            <div>
+              <small className="muted">Violation (m)</small>
+              <Sparkline values={liveHistory.violation} color="#8a4b12" />
+            </div>
+          </div>
+          <div className="table-wrap" style={{ maxHeight: 220, marginTop: "0.75rem" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Gen</th>
+                  <th>Cost</th>
+                  <th>Violation</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(liveHistory.cost || []).map((c, i) => (
+                  <tr key={i}>
+                    <td>{i}</td>
+                    <td>{n2(c)}</td>
+                    <td>{n2(liveHistory.violation[i])}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       ) : null}
 
       {analysis ? (
         <section className="panel" style={{ marginTop: "1rem" }}>
           <h2>Criticality results</h2>
+          <div className="row">
+            <button className="secondary" type="button" onClick={exportCriticalityCsv}>
+              Download pipes CSV
+            </button>
+            <button className="secondary" type="button" onClick={exportBaselineCsv}>
+              Download baseline CSV
+            </button>
+          </div>
           <div className="stats">
             <div className="stat">
               <strong>{analysis.network.pipes}</strong>
@@ -367,11 +718,11 @@ export default function App() {
               <span>Junctions</span>
             </div>
             <div className="stat">
-              <strong>{analysis.baseline.resilience_index_Ir.toFixed(4)}</strong>
+              <strong>{n2(analysis.baseline.resilience_index_Ir)}</strong>
               <span>Resilience Ir</span>
             </div>
             <div className="stat">
-              <strong>{analysis.baseline.weighted_surplus_X.toFixed(4)}</strong>
+              <strong>{n2(analysis.baseline.weighted_surplus_X)}</strong>
               <span>Surplus X</span>
             </div>
           </div>
@@ -402,20 +753,22 @@ export default function App() {
                   <tr key={p.Pipe_ID}>
                     <td>{p.Rank}</td>
                     <td>{p.Pipe_ID}</td>
-                    <td>{p.Composite_Criticality}</td>
+                    <td>{n2(p.Composite_Criticality)}</td>
                     <td>{p.Criticality_Class}</td>
-                    <td>{p["Resilience_Reduction_%"]}</td>
-                    <td>{p["Path_Frequency_%"]}</td>
-                    <td>{p["Flow_Criticality_%"]}</td>
-                    <td>{p["Betweenness_Centrality_%"]}</td>
-                    <td>{p["Demand_Coverage_%"]}</td>
-                    <td>{p.Segment_Importance}</td>
+                    <td>{n2(p["Resilience_Reduction_%"])}</td>
+                    <td>{n2(p["Path_Frequency_%"])}</td>
+                    <td>{n2(p["Flow_Criticality_%"])}</td>
+                    <td>{n2(p["Betweenness_Centrality_%"])}</td>
+                    <td>{n2(p["Demand_Coverage_%"])}</td>
+                    <td>{n2(p.Segment_Importance)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="muted">Showing top {topPipes.length} of {analysis.pipes.length} pipes.</p>
+          <p className="muted">
+            Showing top {topPipes.length} of {analysis.pipes.length} pipes (full set in CSV).
+          </p>
         </section>
       ) : null}
 
@@ -424,11 +777,11 @@ export default function App() {
           <h2>Optimization results</h2>
           <div className="stats">
             <div className="stat">
-              <strong>{optResult.best.cost.toFixed(1)}</strong>
+              <strong>{n2(optResult.best.cost)}</strong>
               <span>Best cost</span>
             </div>
             <div className="stat">
-              <strong>{optResult.best.violation.toFixed(4)}</strong>
+              <strong>{n2(optResult.best.violation)}</strong>
               <span>Best violation (m)</span>
             </div>
             <div className="stat">
@@ -436,25 +789,14 @@ export default function App() {
               <span>Pareto solutions</span>
             </div>
           </div>
-          <div className="history">
-            <div>
-              <small className="muted">Cost history</small>
-              <Sparkline values={optResult.history.cost} />
-            </div>
-            <div>
-              <small className="muted">Violation history</small>
-              <Sparkline values={optResult.history.violation} color="#8a4b12" />
-            </div>
-          </div>
           <div className="row">
+            <button className="secondary" type="button" onClick={exportOptCsv}>
+              Download optimization CSVs
+            </button>
             <button
               className="secondary"
-              onClick={() =>
-                downloadText(
-                  `${(file?.name || "network").replace(/\.inp$/i, "")}_optimized.inp`,
-                  optResult.optimized_inp || ""
-                )
-              }
+              type="button"
+              onClick={() => downloadText(`${stem}_optimized.inp`, optResult.optimized_inp || "")}
               disabled={!optResult.optimized_inp}
             >
               Download optimized .inp
@@ -464,8 +806,8 @@ export default function App() {
       ) : null}
 
       <footer>
-        Reuses Water Criticality Code + GA_WDN_Optimization. Defaults loaded
-        {defaults ? " from API." : "…"}
+        Reuses Water Criticality Code + GA_WDN_Optimization. Defaults
+        {defaults ? " loaded from API." : "…"} Numerics: 2 decimals.
       </footer>
     </>
   );

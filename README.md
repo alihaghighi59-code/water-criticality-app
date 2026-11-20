@@ -34,6 +34,14 @@ UI: http://127.0.0.1:5173 (proxies `/api` to the Flask server)
 
 Optional: `npm run build` then open the Flask server — it serves `frontend/dist`.
 
+## UI additions
+
+- **Network figure:** after choosing an `.inp`, the map loads from `/api/network` (pan/zoom; pipes color by composite after analysis).
+- **CSV export:** criticality pipes + baseline; optimization history / Pareto / diameters / best.
+- **Live GA progress:** `/api/optimize/stream` (NDJSON) updates cost/violation charts and table each generation.
+- **Help tab:** formulations for indices and GA objectives from the notebooks.
+- **Decimals:** all floating results display/export with **two decimal places**.
+
 ## Metrics / indexes (criticality)
 
 Per pipe:

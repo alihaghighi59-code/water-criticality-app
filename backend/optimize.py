@@ -13,6 +13,10 @@ DEFAULT_PIPE_SIZES_MM = [100, 200, 300, 400, 500, 600, 700]
 DEFAULT_PIPE_COSTS = [50, 90, 140, 210, 355, 430, 650]
 
 
+def _r2(x):
+    return round(float(x), 2)
+
+
 def _reset_deap_creators():
     if hasattr(creator, "FitnessMulti"):
         del creator.FitnessMulti
@@ -33,10 +37,12 @@ def run_ga_optimization(
     indpb=0.1,
     seed=None,
     write_opt_inp=True,
+    on_generation=None,
 ):
     """NSGA-II multi-objective pipe sizing (cost + pressure violation).
 
     Defaults for n_gen/pop_size are UI-safe; notebook used n_gen=500, pop_size=200.
+    on_generation(payload): optional callback each generation (incl. gen 0 = initial pop).
     """
     pipe_sizes = np.array(pipe_sizes_mm if pipe_sizes_mm is not None else DEFAULT_PIPE_SIZES_MM, dtype=float)
     pipe_costs = np.array(pipe_costs if pipe_costs is not None else DEFAULT_PIPE_COSTS, dtype=float)
@@ -103,12 +109,29 @@ def run_ga_optimization(
     cost_history = []
     violation_history = []
 
+    def _emit(generation, best_ind):
+        payload = {
+            "generation": int(generation),
+            "n_gen": int(n_gen),
+            "cost": _r2(best_ind.fitness.values[0]),
+            "violation": _r2(best_ind.fitness.values[1]),
+            "cost_history": [_r2(v) for v in cost_history],
+            "violation_history": [_r2(v) for v in violation_history],
+            "pareto_size": len(hof),
+        }
+        if on_generation is not None:
+            on_generation(payload)
+
     fits = toolbox.map(toolbox.evaluate, pop)
     for ind, fit in zip(pop, fits):
         ind.fitness.values = fit
     hof.update(pop)
+    best0 = min(hof, key=lambda ind: ind.fitness.values[1])
+    cost_history.append(float(best0.fitness.values[0]))
+    violation_history.append(float(best0.fitness.values[1]))
+    _emit(0, best0)
 
-    for _gen in range(int(n_gen)):
+    for gen in range(1, int(n_gen) + 1):
         offspring = algorithms.varAnd(pop, toolbox, cxpb=float(cxpb), mutpb=float(mutpb))
         fits = toolbox.map(toolbox.evaluate, offspring)
         for ind, fit in zip(offspring, fits):
@@ -118,6 +141,7 @@ def run_ga_optimization(
         best = min(hof, key=lambda ind: ind.fitness.values[1])
         cost_history.append(float(best.fitness.values[0]))
         violation_history.append(float(best.fitness.values[1]))
+        _emit(gen, best)
 
     best_solution = min(hof, key=lambda ind: (ind.fitness.values[1], ind.fitness.values[0]))
     for i, pipe_idx in enumerate(best_solution):
@@ -132,34 +156,34 @@ def run_ga_optimization(
         opt_inp_text = opt_inp_path.read_text(encoding="utf-8", errors="replace")
 
     diameter_mm = {
-        pipes[i]: float(pipe_sizes[int(pipe_idx)]) for i, pipe_idx in enumerate(best_solution)
+        pipes[i]: _r2(pipe_sizes[int(pipe_idx)]) for i, pipe_idx in enumerate(best_solution)
     }
 
     return {
         "n_pipes": n_pipes,
         "settings": {
-            "min_pressure": float(min_pressure),
-            "pipe_sizes_mm": pipe_sizes.tolist(),
-            "pipe_costs": pipe_costs.tolist(),
+            "min_pressure": _r2(min_pressure),
+            "pipe_sizes_mm": [_r2(v) for v in pipe_sizes.tolist()],
+            "pipe_costs": [_r2(v) for v in pipe_costs.tolist()],
             "n_gen": int(n_gen),
             "pop_size": int(pop_size),
-            "cxpb": float(cxpb),
-            "mutpb": float(mutpb),
-            "indpb": float(indpb),
+            "cxpb": _r2(cxpb),
+            "mutpb": _r2(mutpb),
+            "indpb": _r2(indpb),
             "seed": seed,
         },
         "best": {
-            "cost": float(best_solution.fitness.values[0]),
-            "violation": float(best_solution.fitness.values[1]),
+            "cost": _r2(best_solution.fitness.values[0]),
+            "violation": _r2(best_solution.fitness.values[1]),
             "pipe_diameters_mm": diameter_mm,
         },
         "pareto_front": [
-            {"cost": float(ind.fitness.values[0]), "violation": float(ind.fitness.values[1])}
+            {"cost": _r2(ind.fitness.values[0]), "violation": _r2(ind.fitness.values[1])}
             for ind in hof
         ],
         "history": {
-            "cost": cost_history,
-            "violation": violation_history,
+            "cost": [_r2(v) for v in cost_history],
+            "violation": [_r2(v) for v in violation_history],
         },
         "optimized_inp": opt_inp_text,
         "optimized_inp_path": str(opt_inp_path) if opt_inp_path else None,

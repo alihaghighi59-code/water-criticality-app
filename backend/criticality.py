@@ -869,13 +869,13 @@ def compute_pipe_criticality(inp_file, min_head, output_folder, make_plots=True)
 
         criticality_data.append({
             'Pipe_ID': pipe_name,
-            'Diameter_m': round(diameter, 4),
+            'Diameter_m': round(diameter, 2),
             'Length_m': round(length, 2),
             'Resilience_Reduction_%': round(delta_Ir, 2),
             'Path_Frequency_%': round(pf, 2),
             'Flow_Criticality_%': round(flow_crit, 2),
             'Betweenness_Centrality_%': round(bc, 2),
-            'Demand_Coverage_m3_s': round(demand_cov, 6),
+            'Demand_Coverage_m3_s': round(demand_cov, 2),
             'Demand_Coverage_%': round(demand_cov_pct, 2),
             'Segment_Importance': round(seg_importance, 2),
             'Composite_Criticality': round(composite, 2),
@@ -1226,19 +1226,31 @@ def run_analysis(
         )
 
         class_dist = df["Criticality_Class"].value_counts().to_dict()
+        pipes = df.to_dict(orient="records")
+        # Enforce two-decimal display/export for all float metrics
+        float_cols = [
+            "Diameter_m", "Length_m", "Resilience_Reduction_%", "Path_Frequency_%",
+            "Flow_Criticality_%", "Betweenness_Centrality_%", "Demand_Coverage_m3_s",
+            "Demand_Coverage_%", "Segment_Importance", "Composite_Criticality",
+        ]
+        for row in pipes:
+            for col in float_cols:
+                if col in row and row[col] is not None:
+                    row[col] = round(float(row[col]), 2)
         return {
             "network": network_stats,
             "baseline": {
-                "weighted_surplus_X": float(baseline_X),
-                "resilience_index_Ir": float(baseline_resilience),
-                "min_head_m": float(min_head),
+                "weighted_surplus_X": round(float(baseline_X), 2),
+                "resilience_index_Ir": round(float(baseline_resilience), 2),
+                "min_head_m": round(float(min_head), 2),
             },
-            "composite_weights": dict(COMPOSITE_WEIGHTS),
+            "composite_weights": {k: round(float(v), 2) for k, v in COMPOSITE_WEIGHTS.items()},
             "critical_nodes": {
-                k: {"structure": v[0], "importance": v[1]} for k, v in CRITICAL_NODES.items()
+                k: {"structure": v[0], "importance": round(float(v[1]), 2)}
+                for k, v in CRITICAL_NODES.items()
             },
             "class_distribution": {str(k): int(v) for k, v in class_dist.items()},
-            "pipes": df.to_dict(orient="records"),
+            "pipes": pipes,
         }
     finally:
         CRITICAL_NODES = saved_nodes

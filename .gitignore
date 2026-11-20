@@ -6,6 +6,6 @@ __pycache__/
 .venv/
 venv/
 *.log
-backend/_smoke_test.py
+backend/_smoke*.py
 backend/temp.*
 .DS_Store

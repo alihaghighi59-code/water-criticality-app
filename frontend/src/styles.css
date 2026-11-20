@@ -277,3 +277,68 @@ footer {
   color: var(--muted);
   font-size: 0.85rem;
 }
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.net-wrap {
+  margin-top: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7faf8;
+  overflow: hidden;
+}
+
+.net-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  cursor: grab;
+  touch-action: none;
+  background:
+    linear-gradient(90deg, rgba(183, 197, 188, 0.25) 1px, transparent 1px),
+    linear-gradient(rgba(183, 197, 188, 0.25) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.net-caption {
+  padding: 0.45rem 0.65rem 0.6rem;
+  font-size: 0.82rem;
+}
+
+.spark-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  margin-top: 0.15rem;
+}
+
+.help {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.1rem 1.2rem 1.4rem;
+}
+
+.help h3 {
+  margin-top: 1.1rem;
+  font-size: 1.05rem;
+}
+
+.help pre {
+  background: #f3f7f4;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.7rem 0.8rem;
+  overflow: auto;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.help p {
+  color: var(--ink);
+}
