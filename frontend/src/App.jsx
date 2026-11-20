@@ -52,8 +52,11 @@ export default function App() {
   const [criticalNodesText, setCriticalNodesText] = useState("{}");
   const [opt, setOpt] = useState({
     min_pressure: 18,
-    pipe_sizes_mm: "100,200,300,400,500,600,700",
-    pipe_costs: "50,90,140,210,355,430,650",
+    // Exact Nordvik inventory (mm) + matching $/m — replaced again on INP upload
+    pipe_sizes_mm:
+      "200,203,206,225,229,250,254,280,300,305,315,324,350,355,356,381,400,450,483,500,533,560,584,600,610,630,700,710,800,900,1000,1200",
+    pipe_costs:
+      "90.00,91.20,92.40,100.00,102.40,115.00,117.00,130.00,140.00,143.33,150.00,153.86,165.00,170.00,170.89,193.11,210.00,255.00,321.00,355.00,374.25,390.00,414.00,430.00,440.00,460.00,650.00,663.00,780.00,920.00,1100.00,1450.00",
     n_gen: 20,
     pop_size: 30,
     cxpb: 0.7,

@@ -9,47 +9,65 @@ import numpy as np
 import wntr
 from deap import algorithms, base, creator, tools
 
-# Fallback when no INP is loaded yet (original GA notebook small catalog).
-DEFAULT_PIPE_SIZES_MM = [100, 200, 300, 400, 500, 600, 700]
-DEFAULT_PIPE_COSTS = [50.00, 90.00, 140.00, 210.00, 355.00, 430.00, 650.00]
+# UI / API default discrete sizes = exact Nordvik inventory (see NORDVIK_INVENTORY_MM).
+# Costs filled after UNIT_COST_BY_MM is defined (see below).
 
-# Nordvik commercial family (200–1200 mm) used when the network spans that range.
-NORDVIK_FAMILY_MM = [200, 250, 300, 350, 400, 450, 500, 600, 700, 800, 900, 1000, 1200]
-
-# Master commercial catalog for snapping/filling (mm).
-COMMERCIAL_MM = [
-    100, 110, 130, 150, 200, 225, 250, 280, 300, 315, 350, 355,
-    400, 450, 500, 560, 600, 630, 700, 800, 900, 1000, 1200,
+# Exact Nordvik discrete inventory (mm) — do not round/replace with a coarser family.
+NORDVIK_INVENTORY_MM = [
+    200, 203, 206, 225, 229, 250, 254, 280, 300, 305, 315, 324,
+    350, 355, 356, 381, 400, 450, 483, 500, 533, 560, 584, 600,
+    610, 630, 700, 710, 800, 900, 1000, 1200,
 ]
+# Back-compat alias
+NORDVIK_FAMILY_MM = NORDVIK_INVENTORY_MM
 
-# Unit cost $/m — anchored to GA_WDN_Optimization.ipynb, extended for Nordvik sizes.
-# Notebook cell 0: 100→50, 200→90, 300→140, 400→210, 500→355, 600→430, 700→650
-# Notebook cell 5 (larger): 300→110 … 1000→470 — blended; costs always 2 dp.
+# Master catalog for non-Nordvik snapping (mm).
+COMMERCIAL_MM = sorted(set(
+    [100, 110, 130, 150] + NORDVIK_INVENTORY_MM
+))
+
+# Unit cost $/m — GA notebook anchors + explicit Nordvik inventory (always 2 dp).
 UNIT_COST_BY_MM = {
     100: 50.00,
     110: 55.00,
     130: 65.00,
     150: 75.00,
     200: 90.00,
+    203: 91.20,
+    206: 92.40,
     225: 100.00,
+    229: 102.40,
     250: 115.00,
+    254: 117.00,
     280: 130.00,
     300: 140.00,
+    305: 143.33,
     315: 150.00,
+    324: 153.86,
     350: 165.00,
     355: 170.00,
+    356: 170.89,
+    381: 193.11,
     400: 210.00,
     450: 255.00,
+    483: 321.00,
     500: 355.00,
+    533: 374.25,
     560: 390.00,
+    584: 414.00,
     600: 430.00,
+    610: 440.00,
     630: 460.00,
     700: 650.00,
+    710: 663.00,
     800: 780.00,
     900: 920.00,
     1000: 1100.00,
     1200: 1450.00,
 }
+
+DEFAULT_PIPE_SIZES_MM = list(NORDVIK_INVENTORY_MM)
+DEFAULT_PIPE_COSTS = [round(float(UNIT_COST_BY_MM[d]), 2) for d in NORDVIK_INVENTORY_MM]
 
 
 def _r2(x):
@@ -111,15 +129,11 @@ def diameters_and_costs_from_network(inp_path) -> dict:
         }
 
     d_min, d_max = present_mm[0], present_mm[-1]
-    # Nordvik-like: large span in the 200–1200 family → use discrete family catalog
+    # Nordvik-like → exact inventory set (no rounding to a coarser family)
     nordvik_like = d_min >= 180 and d_max >= 900
-    if nordvik_like:
-        catalog = NORDVIK_FAMILY_MM
-        lo = _nearest_commercial(d_min, catalog)
-        hi = _nearest_commercial(d_max, catalog)
-        sizes = [s for s in catalog if lo <= s <= hi]
-        sizes = sorted(set(sizes + [lo, hi]))
-        catalog_name = "nordvik_family_200_1200"
+    if nordvik_like or set(present_mm) >= set(NORDVIK_INVENTORY_MM):
+        sizes = list(NORDVIK_INVENTORY_MM)
+        catalog_name = "nordvik_inventory_exact"
     else:
         # Diameters actually present in the INP, snapped to nearest commercial size
         catalog = COMMERCIAL_MM

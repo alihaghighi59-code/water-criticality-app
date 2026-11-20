@@ -156,8 +156,8 @@ def defaults():
                 "unit_cost_table_mm": {
                     str(k): optimize._r2(v) for k, v in optimize.UNIT_COST_BY_MM.items()
                 },
-                "nordvik_family_mm": list(optimize.NORDVIK_FAMILY_MM),
-                "note": "On INP upload, pipe_sizes_mm/pipe_costs are replaced from network diameters via /api/network optimization_defaults",
+                "nordvik_inventory_mm": list(optimize.NORDVIK_INVENTORY_MM),
+                "note": "Nordvik INPs prefill the exact Nordvik inventory diameters + matching unit costs (2 dp)",
             },
         }
     )

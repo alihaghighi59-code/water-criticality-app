@@ -64,7 +64,9 @@ Settings: min head Hl, composite weights, critical-node importance map.
 ## Optimization settings (GA)
 
 - min_pressure
-- pipe_sizes_mm, pipe_costs — **auto-filled on INP upload** from network diameters (Nordvik → 200–1200 mm family; otherwise diameters present in the INP). Unit costs from `UNIT_COST_BY_MM` (2 decimals).
+- pipe_sizes_mm, pipe_costs — **auto-filled on INP upload**. Nordvik → exact inventory  
+  `200,203,206,225,229,250,254,280,300,305,315,324,350,355,356,381,400,450,483,500,533,560,584,600,610,630,700,710,800,900,1000,1200`  
+  with matching `$/m` costs (2 decimals). Other networks → diameters present in the INP.
 - n_gen, pop_size
 - cxpb, mutpb, indpb
 - seed (optional)
