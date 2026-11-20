@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Help from "./Help.jsx";
+import NetworkMap from "./NetworkMap.jsx";
+import { downloadText, n2, toCsv } from "./format.js";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -10,36 +12,6 @@ const WEIGHT_KEYS = [
   "Betweenness_Centrality_%",
   "Demand_Coverage_%",
 ];
-
-/** Format numeric results to exactly two decimal places. */
-export function n2(v) {
-  if (v === null || v === undefined || v === "") return "";
-  const x = Number(v);
-  if (Number.isNaN(x)) return String(v);
-  return x.toFixed(2);
-}
-
-function downloadText(filename, text, mime = "text/plain;charset=utf-8") {
-  const blob = new Blob([text], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function toCsv(rows) {
-  if (!rows?.length) return "";
-  const keys = Object.keys(rows[0]);
-  const esc = (v) => {
-    if (v === null || v === undefined) return "";
-    if (typeof v === "number" && Number.isFinite(v)) return n2(v);
-    const s = String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  return [keys.join(","), ...rows.map((r) => keys.map((k) => esc(r[k])).join(","))].join("\n");
-}
 
 function Sparkline({ values, color = "#0f6b4c", labelMin, labelMax }) {
   const points = useMemo(() => {
@@ -65,139 +37,6 @@ function Sparkline({ values, color = "#0f6b4c", labelMin, labelMax }) {
       <div className="spark-labels muted">
         <span>{n2(labelMin ?? Math.min(...values))}</span>
         <span>{n2(labelMax ?? Math.max(...values))}</span>
-      </div>
-    </div>
-  );
-}
-
-function NetworkMap({ geometry, pipeScores }) {
-  const [hover, setHover] = useState(null);
-  const [view, setView] = useState({ scale: 1, tx: 0, ty: 0 });
-  const drag = useRef(null);
-
-  const layout = useMemo(() => {
-    if (!geometry?.nodes?.length) return null;
-    const xs = geometry.nodes.map((n) => n.x);
-    const ys = geometry.nodes.map((n) => n.y);
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
-    const w = maxX - minX || 1;
-    const h = maxY - minY || 1;
-    const pad = 24;
-    const W = 720;
-    const H = 420;
-    const sx = (W - 2 * pad) / w;
-    const sy = (H - 2 * pad) / h;
-    const s = Math.min(sx, sy);
-    const byId = {};
-    for (const n of geometry.nodes) {
-      byId[n.id] = {
-        ...n,
-        px: pad + (n.x - minX) * s,
-        // flip Y for screen coordinates
-        py: H - pad - (n.y - minY) * s,
-      };
-    }
-    return { byId, W, H, pipes: geometry.pipes || [] };
-  }, [geometry]);
-
-  const scoreMap = useMemo(() => {
-    const m = {};
-    if (pipeScores) {
-      for (const p of pipeScores) m[String(p.Pipe_ID)] = Number(p.Composite_Criticality);
-    }
-    return m;
-  }, [pipeScores]);
-
-  const colorFor = (id) => {
-    const v = scoreMap[id];
-    if (v === undefined || Number.isNaN(v)) return "#5a7264";
-    const t = Math.max(0, Math.min(1, v / 100));
-    const r = Math.round(20 + t * 160);
-    const g = Math.round(110 - t * 80);
-    const b = Math.round(70 - t * 40);
-    return `rgb(${r},${g},${b})`;
-  };
-
-  if (!layout) {
-    return <p className="muted">Upload an .inp file to show the network figure.</p>;
-  }
-
-  const onWheel = (e) => {
-    e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    setView((v) => ({ ...v, scale: Math.min(8, Math.max(0.3, v.scale * factor)) }));
-  };
-
-  return (
-    <div className="net-wrap">
-      <svg
-        className="net-svg"
-        viewBox={`0 0 ${layout.W} ${layout.H}`}
-        onWheel={onWheel}
-        onMouseDown={(e) => {
-          drag.current = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty };
-        }}
-        onMouseMove={(e) => {
-          if (!drag.current) return;
-          setView((v) => ({
-            ...v,
-            tx: drag.current.tx + (e.clientX - drag.current.x),
-            ty: drag.current.ty + (e.clientY - drag.current.y),
-          }));
-        }}
-        onMouseUp={() => {
-          drag.current = null;
-        }}
-        onMouseLeave={() => {
-          drag.current = null;
-        }}
-      >
-        <g transform={`translate(${view.tx} ${view.ty}) scale(${view.scale})`}>
-          {layout.pipes.map((p) => {
-            const a = layout.byId[p.start];
-            const b = layout.byId[p.end];
-            if (!a || !b) return null;
-            const score = scoreMap[p.id];
-            return (
-              <line
-                key={p.id}
-                x1={a.px}
-                y1={a.py}
-                x2={b.px}
-                y2={b.py}
-                stroke={colorFor(p.id)}
-                strokeWidth={score !== undefined ? 2.2 : 1.4}
-                onMouseEnter={() =>
-                  setHover(
-                    `Pipe ${p.id} · L=${n2(p.length_m)} m · D=${n2(p.diameter_m)} m` +
-                      (score !== undefined ? ` · composite=${n2(score)}` : "")
-                  )
-                }
-                onMouseLeave={() => setHover(null)}
-              />
-            );
-          })}
-          {Object.values(layout.byId).map((n) => (
-            <circle
-              key={n.id}
-              cx={n.px}
-              cy={n.py}
-              r={n.type === "Reservoir" || n.type === "Tank" ? 5.5 : 3.2}
-              fill={n.type === "Reservoir" ? "#0f6b4c" : n.type === "Tank" ? "#8a4b12" : "#14201a"}
-              onMouseEnter={() =>
-                setHover(`Node ${n.id} (${n.type}) · x=${n2(n.x)}, y=${n2(n.y)}`)
-              }
-              onMouseLeave={() => setHover(null)}
-            />
-          ))}
-        </g>
-      </svg>
-      <div className="net-caption muted">
-        Drag to pan · wheel to zoom
-        {hover ? ` · ${hover}` : ""}
       </div>
     </div>
   );
