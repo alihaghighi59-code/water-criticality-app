@@ -1,0 +1,9 @@
+wntr>=1.2
+networkx
+pandas
+numpy
+matplotlib
+seaborn
+openpyxl
+deap
+flask
