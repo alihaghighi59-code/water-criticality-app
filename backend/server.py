@@ -76,6 +76,7 @@ def _network_geometry(inp_path: Path) -> dict:
                 "length_m": round(float(link.length), 2),
             }
         )
+    opt_defaults = optimize.diameters_and_costs_from_network(inp_path)
     return {
         "source_file": inp_path.name,
         "nodes": nodes,
@@ -87,6 +88,7 @@ def _network_geometry(inp_path: Path) -> dict:
             "reservoirs": len(wn.reservoir_name_list),
             "tanks": len(wn.tank_name_list),
         },
+        "optimization_defaults": opt_defaults,
     }
 
 
@@ -143,7 +145,7 @@ def defaults():
             "optimization": {
                 "min_pressure": 18.0,
                 "pipe_sizes_mm": [float(v) for v in optimize.DEFAULT_PIPE_SIZES_MM],
-                "pipe_costs": [float(v) for v in optimize.DEFAULT_PIPE_COSTS],
+                "pipe_costs": [optimize._r2(v) for v in optimize.DEFAULT_PIPE_COSTS],
                 "n_gen": 20,
                 "pop_size": 30,
                 "cxpb": 0.7,
@@ -151,6 +153,11 @@ def defaults():
                 "indpb": 0.1,
                 "seed": None,
                 "notebook_defaults_note": "GA_WDN_Optimization.ipynb used n_gen=500, pop_size=200",
+                "unit_cost_table_mm": {
+                    str(k): optimize._r2(v) for k, v in optimize.UNIT_COST_BY_MM.items()
+                },
+                "nordvik_family_mm": list(optimize.NORDVIK_FAMILY_MM),
+                "note": "On INP upload, pipe_sizes_mm/pipe_costs are replaced from network diameters via /api/network optimization_defaults",
             },
         }
     )

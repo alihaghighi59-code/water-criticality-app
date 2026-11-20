@@ -9,12 +9,133 @@ import numpy as np
 import wntr
 from deap import algorithms, base, creator, tools
 
+# Fallback when no INP is loaded yet (original GA notebook small catalog).
 DEFAULT_PIPE_SIZES_MM = [100, 200, 300, 400, 500, 600, 700]
-DEFAULT_PIPE_COSTS = [50, 90, 140, 210, 355, 430, 650]
+DEFAULT_PIPE_COSTS = [50.00, 90.00, 140.00, 210.00, 355.00, 430.00, 650.00]
+
+# Nordvik commercial family (200–1200 mm) used when the network spans that range.
+NORDVIK_FAMILY_MM = [200, 250, 300, 350, 400, 450, 500, 600, 700, 800, 900, 1000, 1200]
+
+# Master commercial catalog for snapping/filling (mm).
+COMMERCIAL_MM = [
+    100, 110, 130, 150, 200, 225, 250, 280, 300, 315, 350, 355,
+    400, 450, 500, 560, 600, 630, 700, 800, 900, 1000, 1200,
+]
+
+# Unit cost $/m — anchored to GA_WDN_Optimization.ipynb, extended for Nordvik sizes.
+# Notebook cell 0: 100→50, 200→90, 300→140, 400→210, 500→355, 600→430, 700→650
+# Notebook cell 5 (larger): 300→110 … 1000→470 — blended; costs always 2 dp.
+UNIT_COST_BY_MM = {
+    100: 50.00,
+    110: 55.00,
+    130: 65.00,
+    150: 75.00,
+    200: 90.00,
+    225: 100.00,
+    250: 115.00,
+    280: 130.00,
+    300: 140.00,
+    315: 150.00,
+    350: 165.00,
+    355: 170.00,
+    400: 210.00,
+    450: 255.00,
+    500: 355.00,
+    560: 390.00,
+    600: 430.00,
+    630: 460.00,
+    700: 650.00,
+    800: 780.00,
+    900: 920.00,
+    1000: 1100.00,
+    1200: 1450.00,
+}
 
 
 def _r2(x):
     return round(float(x), 2)
+
+
+def unit_cost_for_mm(diameter_mm: float) -> float:
+    """Lookup or linearly interpolate unit cost ($/m) at two decimals."""
+    d = float(diameter_mm)
+    if d in UNIT_COST_BY_MM:
+        return _r2(UNIT_COST_BY_MM[d])
+    keys = sorted(UNIT_COST_BY_MM)
+    if d <= keys[0]:
+        return _r2(UNIT_COST_BY_MM[keys[0]])
+    if d >= keys[-1]:
+        # mild extrapolation beyond 1200 mm
+        k0, k1 = keys[-2], keys[-1]
+        c0, c1 = UNIT_COST_BY_MM[k0], UNIT_COST_BY_MM[k1]
+        slope = (c1 - c0) / (k1 - k0)
+        return _r2(c1 + slope * (d - k1))
+    for i in range(len(keys) - 1):
+        a, b = keys[i], keys[i + 1]
+        if a <= d <= b:
+            ca, cb = UNIT_COST_BY_MM[a], UNIT_COST_BY_MM[b]
+            t = (d - a) / (b - a) if b != a else 0.0
+            return _r2(ca + t * (cb - ca))
+    return _r2(UNIT_COST_BY_MM[keys[-1]])
+
+
+def _nearest_commercial(mm: float, catalog: list[int]) -> int:
+    return min(catalog, key=lambda c: abs(c - mm))
+
+
+def diameters_and_costs_from_network(inp_path) -> dict:
+    """Build default GA pipe_sizes_mm / pipe_costs from diameters in the INP.
+
+    - Reads unique pipe diameters (mm) from the model.
+    - If the network spans the Nordvik family (~200–1200 mm), uses NORDVIK_FAMILY_MM
+      clipped to the observed min/max (with nearest commercial edges).
+    - Otherwise uses commercial catalog sizes covering the observed range, plus
+      nearest snaps of diameters actually present.
+    """
+    wn = wntr.network.WaterNetworkModel(str(inp_path))
+    present_mm = sorted(
+        {
+            int(round(float(wn.get_link(name).diameter) * 1000.0))
+            for name in wn.pipe_name_list
+        }
+    )
+    if not present_mm:
+        sizes = list(DEFAULT_PIPE_SIZES_MM)
+        costs = [_r2(c) for c in DEFAULT_PIPE_COSTS]
+        return {
+            "pipe_sizes_mm": sizes,
+            "pipe_costs": costs,
+            "present_mm": [],
+            "catalog": "fallback_notebook",
+            "cost_table": {str(s): _r2(c) for s, c in zip(sizes, costs)},
+        }
+
+    d_min, d_max = present_mm[0], present_mm[-1]
+    # Nordvik-like: large span in the 200–1200 family → use discrete family catalog
+    nordvik_like = d_min >= 180 and d_max >= 900
+    if nordvik_like:
+        catalog = NORDVIK_FAMILY_MM
+        lo = _nearest_commercial(d_min, catalog)
+        hi = _nearest_commercial(d_max, catalog)
+        sizes = [s for s in catalog if lo <= s <= hi]
+        sizes = sorted(set(sizes + [lo, hi]))
+        catalog_name = "nordvik_family_200_1200"
+    else:
+        # Diameters actually present in the INP, snapped to nearest commercial size
+        catalog = COMMERCIAL_MM
+        sizes = sorted({_nearest_commercial(p, catalog) for p in present_mm})
+        catalog_name = "present_in_inp"
+
+    costs = [unit_cost_for_mm(s) for s in sizes]
+    return {
+        "pipe_sizes_mm": sizes,
+        "pipe_costs": costs,
+        "present_mm": present_mm,
+        "diameter_min_mm": d_min,
+        "diameter_max_mm": d_max,
+        "catalog": catalog_name,
+        "cost_table": {str(s): c for s, c in zip(sizes, costs)},
+    }
 
 
 def _reset_deap_creators():

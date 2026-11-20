@@ -106,6 +106,14 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || res.statusText);
       setGeometry(data);
+      const od = data.optimization_defaults;
+      if (od?.pipe_sizes_mm?.length && od?.pipe_costs?.length) {
+        setOpt((prev) => ({
+          ...prev,
+          pipe_sizes_mm: od.pipe_sizes_mm.join(","),
+          pipe_costs: od.pipe_costs.map((c) => Number(c).toFixed(2)).join(","),
+        }));
+      }
     } catch (e) {
       setError(e.message);
       setGeometry(null);
@@ -466,13 +474,24 @@ export default function App() {
             />
           </div>
           <div className="field" style={{ marginTop: "0.55rem" }}>
-            <label>pipe_costs $/m (comma-separated)</label>
+            <label>pipe_costs $/m (comma-separated, 2 decimals)</label>
             <input
               type="text"
               value={opt.pipe_costs}
               onChange={(e) => setOpt({ ...opt, pipe_costs: e.target.value })}
             />
           </div>
+          {geometry?.optimization_defaults ? (
+            <p className="muted" style={{ marginTop: "0.45rem" }}>
+              Prefill from INP ({geometry.optimization_defaults.catalog}): diameters{" "}
+              {geometry.optimization_defaults.diameter_min_mm}–{geometry.optimization_defaults.diameter_max_mm}{" "}
+              mm → {geometry.optimization_defaults.pipe_sizes_mm.length} commercial sizes. Editable.
+            </p>
+          ) : (
+            <p className="muted" style={{ marginTop: "0.45rem" }}>
+              Upload an .inp to prefill diameters/costs from the network (Nordvik 200–1200 family when applicable).
+            </p>
+          )}
 
           <div className="row">
             <button onClick={runOptimize} disabled={!!busy}>
