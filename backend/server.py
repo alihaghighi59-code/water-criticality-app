@@ -131,15 +131,8 @@ def defaults():
                     for k, v in criticality.CRITICAL_NODES.items()
                 },
                 "metrics": [
-                    "Resilience_Reduction_%",
-                    "Path_Frequency_%",
-                    "Flow_Criticality_%",
-                    "Betweenness_Centrality_%",
-                    "Demand_Coverage_m3_s",
-                    "Demand_Coverage_%",
-                    "Segment_Importance",
-                    "Composite_Criticality",
-                    "Criticality_Class",
+                    {"key": k, "label": label, "columns": cols, "cost": cost}
+                    for k, label, cols, cost in criticality.METRIC_CATALOG
                 ],
                 "indexes": [
                     "weighted_surplus_X",
@@ -196,6 +189,7 @@ def analyze():
                 else:
                     critical_nodes[k] = (str(v[0]), float(v[1]))
 
+        metrics = _parse_json_field(request.form, "metrics")
         make_plots = request.form.get("make_plots", "false").lower() in ("1", "true", "yes")
         result = criticality.run_analysis(
             str(inp_path),
@@ -204,6 +198,7 @@ def analyze():
             composite_weights=weights,
             make_plots=make_plots,
             output_folder=str(inp_path.parent / "results") if make_plots else None,
+            metrics=metrics,
         )
         result["source_file"] = inp_path.name
         result["geometry"] = _network_geometry(inp_path)

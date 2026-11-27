@@ -72,3 +72,7 @@ Settings: min head Hl, composite weights, critical-node importance map.
 - seed (optional)
 
 Objectives: minimize total pipe cost and average pressure violation (NSGA-II).
+
+## Choosing metrics
+
+The Criticality panel lists every metric with a checkbox (resilience reduction, path frequency, flow, betweenness, demand coverage, segment importance, composite, baseline X/Ir). Only checked ones are computed; the baseline simulation runs only if a dependent metric is checked, and resilience reduction (one EPANET run per pipe) is the expensive one. Composite weights are rescaled over the checked components. Self-check: `py -3 backend/check_metrics.py`.

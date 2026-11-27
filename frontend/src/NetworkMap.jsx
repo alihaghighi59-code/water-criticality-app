@@ -33,6 +33,15 @@ function criticalityColor(v) {
   return `rgb(${r},${g},${b})`;
 }
 
+const SCORE_COLS = [
+  ["Composite_Criticality", "composite"],
+  ["Resilience_Reduction_%", "resilience reduction"],
+  ["Path_Frequency_%", "path frequency"],
+  ["Flow_Criticality_%", "flow criticality"],
+  ["Betweenness_Centrality_%", "betweenness"],
+  ["Demand_Coverage_%", "demand coverage"],
+];
+
 export default function NetworkMap({ geometry, pipeScores }) {
   const elRef = useRef(null);
   const mapRef = useRef(null);
@@ -42,13 +51,17 @@ export default function NetworkMap({ geometry, pipeScores }) {
   const scoreMapRef = useRef({});
   const [labelMode, setLabelMode] = useState("auto");
 
+  const [scoreCol, scoreName] =
+    SCORE_COLS.find(([c]) => pipeScores?.[0] && c in pipeScores[0]) || [];
   const scoreMap = useMemo(() => {
     const m = {};
     (pipeScores || []).forEach((p) => {
-      m[String(p.Pipe_ID)] = Number(p.Composite_Criticality);
+      if (scoreCol) m[String(p.Pipe_ID)] = Number(p[scoreCol]);
     });
     return m;
-  }, [pipeScores]);
+  }, [pipeScores, scoreCol]);
+  const scoreNameRef = useRef(scoreName);
+  scoreNameRef.current = scoreName;
 
   scoreMapRef.current = scoreMap;
   labelModeRef.current = labelMode;
@@ -74,7 +87,7 @@ export default function NetworkMap({ geometry, pipeScores }) {
       const score = scores[id];
       const tip =
         score !== undefined && !Number.isNaN(score)
-          ? `${id} · composite ${n2(score)}`
+          ? `${id} · ${scoreNameRef.current} ${n2(score)}`
           : id;
       layer.bindTooltip(tip, {
         permanent,
@@ -216,7 +229,7 @@ export default function NetworkMap({ geometry, pipeScores }) {
           <span className="sw" style={{ background: NODE_STYLE.Junction.c }} /> junctions
           <span className="sw" style={{ background: NODE_STYLE.Reservoir.c }} /> reservoirs
           <span className="sw" style={{ background: NODE_STYLE.Tank.c }} /> tanks
-          {pipeScores?.length ? " · pipes tinted by composite criticality" : null}
+          {scoreName ? ` · pipes tinted by ${scoreName}` : null}
         </span>
       </div>
       <div ref={elRef} className="opus-map" role="img" aria-label="Water distribution network map" />

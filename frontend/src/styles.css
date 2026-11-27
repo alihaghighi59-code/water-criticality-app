@@ -398,3 +398,7 @@ button.stop-btn:hover:not(:disabled) {
 .help p {
   color: var(--ink);
 }
+
+.metric-list { display: grid; gap: 0.25rem; margin: 0.4rem 0; }
+.metric-item { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
+.metric-item input { width: auto; }

@@ -82,6 +82,11 @@ flow_crit% = 100 · ( |Q_pipe| · Ip ) / max_pipe( |Q| · Ip )`}</pre>
 + 0.05 · Demand_Coverage_%
 
 Classes: Critical ≥ 75 | High ≥ 50 | Medium ≥ 25 | Low < 25`}</pre>
+      <p>
+        If some metrics are unchecked, they are not computed and the composite uses only the
+        checked weighted components, with weights rescaled by (sum of all weights) / (sum of used
+        weights) so it stays on the same 0–100 scale.
+      </p>
 
       <h3>10. Optimization objectives (GA / NSGA-II)</h3>
       <p>

@@ -13,6 +13,17 @@ const WEIGHT_KEYS = [
   "Demand_Coverage_%",
 ];
 
+const TABLE_COLS = [
+  ["Composite_Criticality", "Composite"],
+  ["Criticality_Class", "Class"],
+  ["Resilience_Reduction_%", "Resil%"],
+  ["Path_Frequency_%", "Path%"],
+  ["Flow_Criticality_%", "Flow%"],
+  ["Betweenness_Centrality_%", "BC%"],
+  ["Demand_Coverage_%", "Demand%"],
+  ["Segment_Importance", "Seg"],
+];
+
 function Sparkline({ values, color = "#0f6b4c", labelMin, labelMax }) {
   const points = useMemo(() => {
     if (!values?.length) return "";
@@ -49,6 +60,8 @@ export default function App() {
   const [defaults, setDefaults] = useState(null);
   const [minHead, setMinHead] = useState(18);
   const [weights, setWeights] = useState({});
+  const [metricCatalog, setMetricCatalog] = useState([]);
+  const [selected, setSelected] = useState({});
   const [criticalNodesText, setCriticalNodesText] = useState("{}");
   const [opt, setOpt] = useState({
     min_pressure: 18,
@@ -80,6 +93,8 @@ export default function App() {
         setDefaults(d);
         setMinHead(d.criticality.min_head);
         setWeights(d.criticality.composite_weights);
+        setMetricCatalog(d.criticality.metrics);
+        setSelected(Object.fromEntries(d.criticality.metrics.map((m) => [m.key, true])));
         setCriticalNodesText(JSON.stringify(d.criticality.critical_nodes, null, 2));
         const o = d.optimization;
         setOpt({
@@ -155,6 +170,12 @@ export default function App() {
     form.append("min_head", String(minHead));
     form.append("composite_weights", JSON.stringify(weights));
     form.append("critical_nodes", JSON.stringify(nodes));
+    const metrics = metricCatalog.filter((m) => selected[m.key]).map((m) => m.key);
+    if (!metrics.length) {
+      setError("Select at least one metric.");
+      return;
+    }
+    form.append("metrics", JSON.stringify(metrics));
     setBusy("analyze");
     try {
       const res = await fetch(`${API}/api/analyze`, { method: "POST", body: form });
@@ -263,6 +284,9 @@ export default function App() {
   }
 
   const topPipes = analysis?.pipes?.slice(0, 50) ?? [];
+  const shownCols = TABLE_COLS.filter(([c]) => analysis?.columns?.includes(c));
+  const setAll = (fn) =>
+    setSelected(Object.fromEntries(metricCatalog.map((m) => [m.key, fn(m)])));
   const stem = (file?.name || "network").replace(/\.inp$/i, "");
   const liveHistory = optLive
     ? { cost: optLive.cost_history || [], violation: optLive.violation_history || [] }
@@ -391,6 +415,36 @@ export default function App() {
               />
             </div>
           </div>
+
+          <h3 style={{ marginTop: "0.75rem", fontSize: "1rem" }}>Metrics to compute</h3>
+          <div className="metric-list">
+            {metricCatalog.map((m) => (
+              <label key={m.key} className="metric-item">
+                <input
+                  type="checkbox"
+                  checked={!!selected[m.key]}
+                  onChange={(e) => setSelected((s) => ({ ...s, [m.key]: e.target.checked }))}
+                />
+                {m.label} <span className="muted">({m.cost} cost)</span>
+              </label>
+            ))}
+          </div>
+          <div className="row">
+            <button type="button" className="secondary" onClick={() => setAll(() => true)}>
+              Select all
+            </button>
+            <button type="button" className="secondary" onClick={() => setAll((m) => m.cost !== "high")}>
+              Fast (skip high cost)
+            </button>
+            <button type="button" className="secondary" onClick={() => setAll(() => false)}>
+              Clear
+            </button>
+          </div>
+          <p className="muted">
+            Unchecked metrics are not calculated. Composite is rescaled over the checked
+            components. Resilience reduction runs one EPANET simulation per pipe, so uncheck it
+            on large networks.
+          </p>
 
           <h3 style={{ marginTop: "0.75rem", fontSize: "1rem" }}>Composite weights</h3>
           <div className="weights">
@@ -623,11 +677,11 @@ export default function App() {
               <span>Junctions</span>
             </div>
             <div className="stat">
-              <strong>{n2(analysis.baseline.resilience_index_Ir)}</strong>
+              <strong>{analysis.baseline.resilience_index_Ir == null ? "—" : n2(analysis.baseline.resilience_index_Ir)}</strong>
               <span>Resilience Ir</span>
             </div>
             <div className="stat">
-              <strong>{n2(analysis.baseline.weighted_surplus_X)}</strong>
+              <strong>{analysis.baseline.weighted_surplus_X == null ? "—" : n2(analysis.baseline.weighted_surplus_X)}</strong>
               <span>Surplus X</span>
             </div>
           </div>
@@ -643,14 +697,9 @@ export default function App() {
                 <tr>
                   <th>Rank</th>
                   <th>Pipe</th>
-                  <th>Composite</th>
-                  <th>Class</th>
-                  <th>Resil%</th>
-                  <th>Path%</th>
-                  <th>Flow%</th>
-                  <th>BC%</th>
-                  <th>Demand%</th>
-                  <th>Seg</th>
+                  {shownCols.map(([c, h]) => (
+                    <th key={c}>{h}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -658,14 +707,9 @@ export default function App() {
                   <tr key={p.Pipe_ID}>
                     <td>{p.Rank}</td>
                     <td>{p.Pipe_ID}</td>
-                    <td>{n2(p.Composite_Criticality)}</td>
-                    <td>{p.Criticality_Class}</td>
-                    <td>{n2(p["Resilience_Reduction_%"])}</td>
-                    <td>{n2(p["Path_Frequency_%"])}</td>
-                    <td>{n2(p["Flow_Criticality_%"])}</td>
-                    <td>{n2(p["Betweenness_Centrality_%"])}</td>
-                    <td>{n2(p["Demand_Coverage_%"])}</td>
-                    <td>{n2(p.Segment_Importance)}</td>
+                    {shownCols.map(([c]) => (
+                      <td key={c}>{typeof p[c] === "number" ? n2(p[c]) : p[c]}</td>
+                    ))}
                   </tr>
                 ))}
               </tbody>

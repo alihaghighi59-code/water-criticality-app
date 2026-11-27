@@ -696,7 +696,36 @@ def create_criticality_comparison_plots(df, output_folder):
 #  Main computation with enhanced metrics
 # ============================================================
 
-def compute_pipe_criticality(inp_file, min_head, output_folder, make_plots=True):
+METRIC_CATALOG = [
+    # key, label, columns produced, relative cost
+    ("resilience", "Resilience reduction (%)", ["Resilience_Reduction_%"], "high"),
+    ("path_frequency", "Path frequency (%)", ["Path_Frequency_%"], "medium"),
+    ("flow", "Flow criticality (%)", ["Flow_Criticality_%"], "low"),
+    ("betweenness", "Betweenness centrality (%)", ["Betweenness_Centrality_%"], "medium"),
+    ("demand", "Demand coverage (m3/s and %)", ["Demand_Coverage_m3_s", "Demand_Coverage_%"], "low"),
+    ("segment", "Segment importance", ["Segment_Importance"], "low"),
+    ("composite", "Composite criticality + class", ["Composite_Criticality", "Criticality_Class"], "low"),
+    ("baseline", "Baseline X and Ir", [], "low"),
+]
+ALL_METRICS = [m[0] for m in METRIC_CATALOG]
+_COMPOSITE_PARTS = {
+    "resilience": "Resilience_Reduction_%",
+    "path_frequency": "Path_Frequency_%",
+    "flow": "Flow_Criticality_%",
+    "betweenness": "Betweenness_Centrality_%",
+    "demand": "Demand_Coverage_%",
+}
+
+
+def compute_pipe_criticality(inp_file, min_head, output_folder, make_plots=True, metrics=None):
+    sel = set(ALL_METRICS if metrics is None else metrics)
+    unknown = sel - set(ALL_METRICS)
+    if unknown:
+        raise ValueError(f"Unknown metrics: {sorted(unknown)}")
+    if not sel:
+        raise ValueError("Select at least one metric")
+    need_sim = bool(sel & {"resilience", "flow", "segment", "baseline"})
+    need_X = bool(sel & {"resilience", "baseline"})
     logging.info("="*80)
     logging.info("PIPE CRITICALITY ANALYSIS STARTED")
     logging.info("="*80)
@@ -720,34 +749,39 @@ def compute_pipe_criticality(inp_file, min_head, output_folder, make_plots=True)
     reservoir_pipes = identify_reservoir_pipes(wn)
     logging.info(f"  - Reservoir-connected pipes: {len(reservoir_pipes)}")
 
-    logging.info("\nComputing path frequencies...")
-    path_frequency = compute_path_frequency(wn, node_importance=node_importance)
+    path_frequency = {}
+    if "path_frequency" in sel:
+        logging.info("\nComputing path frequencies...")
+        path_frequency = compute_path_frequency(wn, node_importance=node_importance)
 
-    logging.info("\nRunning baseline simulation...")
-    sim = wntr.sim.EpanetSimulator(wn)
-    baseline_results = sim.run_sim()
-    if baseline_results is None:
-        raise ValueError("Baseline simulation failed")
+    baseline_results = None
+    baseline_X = baseline_resilience = None
+    baseline_nodes = {}
+    if need_sim:
+        logging.info("\nRunning baseline simulation...")
+        sim = wntr.sim.EpanetSimulator(wn)
+        baseline_results = sim.run_sim()
+        if baseline_results is None:
+            raise ValueError("Baseline simulation failed")
 
-    # Compute baseline resilience
-    logging.info("\nComputing baseline resilience metrics...")
-    baseline_X, baseline_nodes = compute_network_surplus(
-        wn, baseline_results, min_head, node_importance=node_importance
-    )
-    reservoir_heads = [baseline_results.node['head'].loc[:, r].mean() 
-                      for r in wn.reservoir_name_list]
-    Hs = np.mean(reservoir_heads) if reservoir_heads else min_head
-    denominator = sum(
-        info['Qj'] * (Hs - min_head) * float(node_importance.get(str(node), 1.0))
-        for node, info in baseline_nodes.items()
-    )
-    baseline_resilience = baseline_X / denominator if denominator > 1e-9 else 0.0
-    
-    logging.info(f"  - Network Weighted Surplus (X): {baseline_X:.6f}")
-    logging.info(f"  - Resilience Index (Ir): {baseline_resilience:.6f}")
+    if need_X:
+        logging.info("\nComputing baseline resilience metrics...")
+        baseline_X, baseline_nodes = compute_network_surplus(
+            wn, baseline_results, min_head, node_importance=node_importance
+        )
+        reservoir_heads = [baseline_results.node['head'].loc[:, r].mean() 
+                          for r in wn.reservoir_name_list]
+        Hs = np.mean(reservoir_heads) if reservoir_heads else min_head
+        denominator = sum(
+            info['Qj'] * (Hs - min_head) * float(node_importance.get(str(node), 1.0))
+            for node, info in baseline_nodes.items()
+        )
+        baseline_resilience = baseline_X / denominator if denominator > 1e-9 else 0.0
+        
+        logging.info(f"  - Network Weighted Surplus (X): {baseline_X:.6f}")
+        logging.info(f"  - Resilience Index (Ir): {baseline_resilience:.6f}")
 
-    # Plot baseline node resilience (already includes node importance via contributions)
-    if make_plots and output_folder is not None:
+    if make_plots and output_folder is not None and need_X:
         logging.info("\nGenerating baseline node resilience map...")
         node_values = {n: info["contribution"] for n, info in baseline_nodes.items()}
         plot_node_resilience(
@@ -760,8 +794,10 @@ def compute_pipe_criticality(inp_file, min_head, output_folder, make_plots=True)
 
     # Compute additional metrics
     logging.info("\nComputing additional criticality metrics...")
-    baseline_flows = {pipe: abs(baseline_results.link['flowrate'].loc[:, pipe].mean())
-                     for pipe in wn.pipe_name_list}
+    baseline_flows = {}
+    if baseline_results is not None:
+        baseline_flows = {pipe: abs(baseline_results.link['flowrate'].loc[:, pipe].mean())
+                         for pipe in wn.pipe_name_list}
 
     # Pipe-importance factors based on endpoint node importance (average of Iu and Iv)
     pipe_importance = {}
@@ -778,10 +814,11 @@ def compute_pipe_criticality(inp_file, min_head, output_folder, make_plots=True)
     }
     max_flow = max(weighted_flows.values()) if weighted_flows else 1.0
     
-    logging.info("  - Computing betweenness centrality...")
-    betweenness = compute_betweenness_centrality(wn, node_importance=node_importance)
+    betweenness = {}
+    if "betweenness" in sel:
+        logging.info("  - Computing betweenness centrality...")
+        betweenness = compute_betweenness_centrality(wn, node_importance=node_importance)
     
-    logging.info("  - Computing demand coverage...")
     total_network_demand = sum(
         abs(float(wn.get_node(j).base_demand or 0.0)) * float(node_importance.get(str(j), 1.0))
         for j in wn.junction_name_list
@@ -801,9 +838,19 @@ def compute_pipe_criticality(inp_file, min_head, output_folder, make_plots=True)
         diameter = float(pipe.diameter)
         length = float(pipe.length)
         
+        row = {
+            'Pipe_ID': pipe_name,
+            'Diameter_m': round(diameter, 2),
+            'Length_m': round(length, 2),
+        }
+        parts = {}
+
         # 1. Resilience-based criticality
-        if pipe_name in reservoir_pipes:
+        if "resilience" not in sel:
+            pass
+        elif pipe_name in reservoir_pipes:
             delta_Ir = 100.0
+            parts['resilience'] = delta_Ir
         else:
             wn_temp = deepcopy(wn)
             wn_temp.get_link(pipe_name).initial_status = wntr.network.LinkStatus.Closed
@@ -818,26 +865,59 @@ def compute_pipe_criticality(inp_file, min_head, output_folder, make_plots=True)
             except Exception as e:
                 # Fallback: use importance-weighted flow share
                 delta_Ir = (weighted_flows.get(pipe_name, 0.0) / max_flow) * 100
+            parts['resilience'] = delta_Ir
+        if "resilience" in sel:
+            row['Resilience_Reduction_%'] = round(parts['resilience'], 2)
 
         # 2. Flow-based criticality (importance-weighted flows)
-        flow_crit = compute_flow_based_criticality(
-            baseline_flows, pipe_name, max_flow, pipe_importance=pipe_importance
-        )
-        
-        # 3. Betweenness centrality (already importance-adjusted)
-        bc = betweenness.get(pipe_name, 0.0)
-        
-        # 4. Path frequency (importance-weighted)
-        pf = path_frequency.get(pipe_name, 0.0)
-        
-        # 5. Demand coverage (importance-weighted)
-        demand_cov = compute_demand_coverage(wn, pipe_name, node_importance=node_importance)
-        demand_cov_pct = (demand_cov / total_network_demand * 100) if total_network_demand > 0 else 0.0
-        
-        # 6. Segment importance (purely hydraulic/geometric)
-        seg_importance = compute_segment_importance(wn, pipe_name, baseline_results)
+        if "flow" in sel:
+            parts['flow'] = compute_flow_based_criticality(
+                baseline_flows, pipe_name, max_flow, pipe_importance=pipe_importance
+            )
+            row['Flow_Criticality_%'] = round(parts['flow'], 2)
 
-        # Determine which types of critical nodes this pipe is directly connected to
+        # 3. Betweenness centrality (already importance-adjusted)
+        if "betweenness" in sel:
+            parts['betweenness'] = betweenness.get(pipe_name, 0.0)
+            row['Betweenness_Centrality_%'] = round(parts['betweenness'], 2)
+
+        # 4. Path frequency (importance-weighted)
+        if "path_frequency" in sel:
+            parts['path_frequency'] = path_frequency.get(pipe_name, 0.0)
+            row['Path_Frequency_%'] = round(parts['path_frequency'], 2)
+
+        # 5. Demand coverage (importance-weighted)
+        if "demand" in sel:
+            demand_cov = compute_demand_coverage(wn, pipe_name, node_importance=node_importance)
+            parts['demand'] = (demand_cov / total_network_demand * 100) if total_network_demand > 0 else 0.0
+            row['Demand_Coverage_m3_s'] = round(demand_cov, 2)
+            row['Demand_Coverage_%'] = round(parts['demand'], 2)
+
+        # 6. Segment importance (purely hydraulic/geometric)
+        if "segment" in sel:
+            row['Segment_Importance'] = round(
+                compute_segment_importance(wn, pipe_name, baseline_results), 2
+            )
+
+        # Composite criticality (weighted average); with a subset of components the
+        # weights are rescaled so the composite stays on the same 0-100 scale.
+        if "composite" in sel and parts:
+            w = COMPOSITE_WEIGHTS
+            used = sum(w[_COMPOSITE_PARTS[k]] for k in parts)
+            total = sum(w[c] for c in _COMPOSITE_PARTS.values())
+            scale = total / used if used > 1e-12 else 0.0
+            composite = scale * sum(w[_COMPOSITE_PARTS[k]] * v for k, v in parts.items())
+            if composite >= 75:
+                criticality_class = "Critical"
+            elif composite >= 50:
+                criticality_class = "High"
+            elif composite >= 25:
+                criticality_class = "Medium"
+            else:
+                criticality_class = "Low"
+            row['Composite_Criticality'] = round(composite, 2)
+            row['Criticality_Class'] = criticality_class
+
         critical_types = []
         for node_endpoint in [pipe.start_node_name, pipe.end_node_name]:
             node_str = str(node_endpoint)
@@ -845,51 +925,21 @@ def compute_pipe_criticality(inp_file, min_head, output_folder, make_plots=True)
                 struct_name, _ = CRITICAL_NODES[node_str]
                 if struct_name not in critical_types:
                     critical_types.append(struct_name)
-        is_critical_connected = ";".join(critical_types) if critical_types else "None"
-        
-        # Composite criticality (weighted average)
-        w = COMPOSITE_WEIGHTS
-        composite = (
-            w['Resilience_Reduction_%']   * delta_Ir +
-            w['Path_Frequency_%']         * pf +
-            w['Flow_Criticality_%']       * flow_crit +
-            w['Betweenness_Centrality_%'] * bc +
-            w['Demand_Coverage_%']        * demand_cov_pct
-        )
-        
-        # Classification
-        if composite >= 75:
-            criticality_class = "Critical"
-        elif composite >= 50:
-            criticality_class = "High"
-        elif composite >= 25:
-            criticality_class = "Medium"
-        else:
-            criticality_class = "Low"
+        row['Is_Reservoir_Connected'] = pipe_name in reservoir_pipes
+        row['Is_Critical_Connected'] = ";".join(critical_types) if critical_types else "None"
+        criticality_data.append(row)
 
-        criticality_data.append({
-            'Pipe_ID': pipe_name,
-            'Diameter_m': round(diameter, 2),
-            'Length_m': round(length, 2),
-            'Resilience_Reduction_%': round(delta_Ir, 2),
-            'Path_Frequency_%': round(pf, 2),
-            'Flow_Criticality_%': round(flow_crit, 2),
-            'Betweenness_Centrality_%': round(bc, 2),
-            'Demand_Coverage_m3_s': round(demand_cov, 2),
-            'Demand_Coverage_%': round(demand_cov_pct, 2),
-            'Segment_Importance': round(seg_importance, 2),
-            'Composite_Criticality': round(composite, 2),
-            'Criticality_Class': criticality_class,
-            'Is_Reservoir_Connected': pipe_name in reservoir_pipes,
-            'Is_Critical_Connected': is_critical_connected
-        })
-
-    # Create DataFrame
     df = pd.DataFrame(criticality_data)
-    df = df.sort_values(by='Composite_Criticality', ascending=False).reset_index(drop=True)
+    sort_col = next((c for c in ['Composite_Criticality', 'Resilience_Reduction_%', 'Path_Frequency_%',
+                                 'Flow_Criticality_%', 'Betweenness_Centrality_%',
+                                 'Demand_Coverage_%', 'Segment_Importance'] if c in df), None)
+    if sort_col:
+        df = df.sort_values(by=sort_col, ascending=False)
+    df = df.reset_index(drop=True)
     df.insert(0, 'Rank', range(1, len(df) + 1))
 
-    if make_plots and output_folder is not None:
+    # ponytail: static PNG plots need every column, so they only run for the full metric set.
+    if make_plots and output_folder is not None and sel == set(ALL_METRICS):
         logging.info("\n" + "="*80)
         logging.info("GENERATING VISUALIZATIONS")
         logging.info("="*80)
@@ -1195,6 +1245,7 @@ def run_analysis(
     composite_weights=None,
     make_plots=False,
     output_folder=None,
+    metrics=None,
 ):
     """API-friendly wrapper around the notebook criticality pipeline.
 
@@ -1222,10 +1273,13 @@ def run_analysis(
             setup_logging(out)
 
         df, baseline_resilience, baseline_X, network_stats = compute_pipe_criticality(
-            inp_file, float(min_head), out, make_plots=make_plots
+            inp_file, float(min_head), out, make_plots=make_plots, metrics=metrics
         )
 
-        class_dist = df["Criticality_Class"].value_counts().to_dict()
+        class_dist = (
+            df["Criticality_Class"].value_counts().to_dict()
+            if "Criticality_Class" in df else {}
+        )
         pipes = df.to_dict(orient="records")
         # Enforce two-decimal display/export for all float metrics
         float_cols = [
@@ -1240,10 +1294,12 @@ def run_analysis(
         return {
             "network": network_stats,
             "baseline": {
-                "weighted_surplus_X": round(float(baseline_X), 2),
-                "resilience_index_Ir": round(float(baseline_resilience), 2),
+                "weighted_surplus_X": None if baseline_X is None else round(float(baseline_X), 2),
+                "resilience_index_Ir": None if baseline_resilience is None else round(float(baseline_resilience), 2),
                 "min_head_m": round(float(min_head), 2),
             },
+            "metrics": list(ALL_METRICS if metrics is None else metrics),
+            "columns": [c for c in df.columns],
             "composite_weights": {k: round(float(v), 2) for k, v in COMPOSITE_WEIGHTS.items()},
             "critical_nodes": {
                 k: {"structure": v[0], "importance": round(float(v[1]), 2)}
