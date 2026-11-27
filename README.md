@@ -1,6 +1,6 @@
 # WDN Criticality App (Ali Haghighi)
 
-Minimal React + Flask app under `Roya/criticality-app`.
+Minimal React + Flask app. **Cloning and running it? See [INSTRUCTIONS.md](INSTRUCTIONS.md).**
 
 - **Criticality**: reuses logic from `Water Criticality Code/WDN_Criticality.ipynb` (`backend/criticality.py`).
 - **Optimization**: reuses the DEAP NSGA-II pipe-sizing GA from `GA_WDN_Optimization.ipynb` (`backend/optimize.py`).
