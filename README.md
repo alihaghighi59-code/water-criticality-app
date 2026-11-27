@@ -71,7 +71,13 @@ Settings: min head Hl, composite weights, critical-node importance map.
 - cxpb, mutpb, indpb
 - seed (optional)
 
-Objectives: minimize total pipe cost and average pressure violation (NSGA-II).
+Objectives: real multi-objective DEAP NSGA-II (`selNSGA2` + `ParetoFront`) — not single-objective, not a weighted sum.
+
+- Two objectives, both minimized: (1) total pipe cost, (2) mean pressure violation.
+- Fitness weights `(-1, -1)` only set the minimize direction; there is no scalar combined fitness.
+- The reported "optimum" (and best-so-far after Stop) is the Pareto-front solution with minimum violation, ties broken by cost; it can be expensive.
+- The full Pareto front is still returned and exported (`_opt_pareto.csv`).
+- Charts show the best-of-Pareto (minimum violation) per generation.
 
 ## Choosing metrics
 

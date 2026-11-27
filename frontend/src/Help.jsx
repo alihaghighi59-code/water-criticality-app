@@ -91,7 +91,10 @@ Classes: Critical ≥ 75 | High ≥ 50 | Medium ≥ 25 | Low < 25`}</pre>
       <h3>10. Optimization objectives (GA / NSGA-II)</h3>
       <p>
         From <code>GA_WDN_Optimization.ipynb</code>: discrete commercial diameters for every pipe;
-        DEAP NSGA-II with fitness weights <code>(−1, −1)</code> (minimize both):
+        real multi-objective DEAP NSGA-II (<code>selNSGA2</code> + <code>ParetoFront</code>), not
+        single-objective and not a weighted sum. Two objectives, both minimized: (1) total pipe cost,
+        (2) mean pressure violation. The fitness weights <code>(−1, −1)</code> only set the minimize
+        direction; there is no combined scalar fitness.
       </p>
       <pre>{`Cost = Σ_pipes  length_p · unit_cost(diameter_index_p)
 
@@ -102,6 +105,12 @@ Violation = (1/N) · Σ_nodes max(0, Pmin − P_node)
         <code>mutpb</code>, per-gene <code>indpb</code>), NSGA-II selection. Failed hydraulics return
         large penalties (1e9, 1e3). The UI streams cost and violation each generation (generation 0 =
         initial population).
+      </p>
+      <p>
+        The reported “optimum” (and the best-so-far after Stop) is the Pareto-front solution with the
+        lowest violation, ties broken by cost; it can be expensive. The full Pareto front is still
+        returned and exported (<code>_opt_pareto.csv</code>). The charts plot that best-of-Pareto
+        (minimum violation) per generation.
       </p>
 
       <h3>11. Display / CSV rule</h3>

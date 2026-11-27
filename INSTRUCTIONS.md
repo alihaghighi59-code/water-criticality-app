@@ -54,6 +54,10 @@ Open **http://127.0.0.1:5173** in your browser.
 1. Upload an EPANET network (`.inp`).
 2. **Criticality tab:** tick the metrics you want (resilience reduction is the slowest – one EPANET run per pipe), set min head and composite weights, run. Export results as CSV.
 3. **Optimization tab:** set min pressure, pipe diameters/costs (auto-filled from the INP), generations, population, GA probabilities, optional seed. Run, watch live progress, press **Stop** to keep best-so-far, export CSV or the optimized `.inp`.
+   - It is a real multi-objective DEAP NSGA-II (`selNSGA2` + `ParetoFront`), not single-objective or weighted-sum.
+   - Two minimize objectives: (1) total pipe cost, (2) mean pressure violation. Fitness weights `(-1, -1)` only set the minimize direction; there is no scalar combined fitness.
+   - The reported "optimum" / Stop best is the Pareto-front solution with minimum violation, ties broken by cost; it can be expensive.
+   - The full Pareto front is still exported (`_opt_pareto.csv`). Charts show the best-of-Pareto (min violation) per generation.
 4. **Help tab:** formulas for all indices and objectives.
 
 ## 6. Troubleshooting
